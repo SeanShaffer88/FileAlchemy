@@ -19,6 +19,9 @@ slint = { version = "1.8", default-features = false, features = [
     "std",
     "backend-winit",
     "renderer-software",
+    # Without this the software renderer uses Slint's bundled fallback font
+    # instead of Segoe UI, and CJK/Hebrew/Arabic text does not render at all.
+    "software-renderer-systemfonts",
     "compat-1-2",
     "accessibility",
 ] }

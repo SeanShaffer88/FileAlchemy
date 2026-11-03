@@ -120,10 +120,22 @@ Honest accounting, because a plan is not a build:
   and WiX. The source snapshot was produced in an environment without a Rust
   toolchain and without access to crates.io, so no compilation has been claimed
   or implied.
-* **Expected first-run friction:** third-party API drift in the pinned
-  dependency versions (most likely `ravif::Img` / `SevenZWriter::push_source`,
-  which are isolated to single functions and marked with comments). Everything
-  else uses stable, long-lived APIs.
+* **Cross-checked against upstream sources** (not compiled, but read off the
+  actual tagged sources rather than memory): `windows-sys` 0.59 feature names
+  (all 15 exist), Slint 1.8 cargo features (`backend-winit`,
+  `renderer-software`, `software-renderer-systemfonts`, `compat-1-2`,
+  `accessibility`), `resvg` 0.44's `render(&Tree, Transform, &mut PixmapMut)`
+  and `Options::fontdb_mut()`, `zip` 2.2's `bzip2`/`deflate`/`time` features and
+  `SimpleFileOptions`, and ravif's builder (`with_quality`/`with_speed`/
+  `with_alpha_quality` return `Self`; `encode_rgba` takes an `imgref` view).
+* **API drift that has already been fixed** in this snapshot: `image`'s `avif`
+  feature is encoder-only (so AVIF input is now rejected with an explanation
+  instead of failing to decode), `SevenZWriter::push_source` became
+  `push_archive_entry` with a hand-built entry, and `ravif::Img` became
+  `imgref::ImgVec`.
+* **Expected first-run friction:** whatever is left is most likely a type
+  mismatch inside one converter function; each third-party API call is confined
+  to a single function with a comment saying so.
 * **Next step on a Windows machine:**
 
   ```powershell
