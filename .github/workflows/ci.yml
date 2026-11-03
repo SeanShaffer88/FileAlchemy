@@ -47,11 +47,20 @@ jobs:
           cargo clippy --all-targets --message-format=short -- -A clippy::too_many_arguments -A clippy::needless_return *> clippy.txt
           $code = $LASTEXITCODE
           if ($code -ne 0) {
-            Write-Host "----- last 40 lines -----"
-            Get-Content clippy.txt | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
-            $errors = Get-Content clippy.txt | Where-Object { $_ -match ':\d+:\d+: error' } | Select-Object -First 120
-            if (-not $errors) { $errors = Get-Content clippy.txt | Where-Object { $_ -match 'error' } | Select-Object -First 120 }
-            foreach ($e in $errors) { Write-Host "::error title=rustc::$($e.Trim())" }
+            $all = Get-Content clippy.txt
+            # 1) real diagnostics (rustc "error[E0310]: ..." and "src/x.rs:12:3: error:")
+            $diag = $all | Where-Object {
+              $_ -match '^error(\[E\d+\])?:' -or
+              $_ -match ':\d+:\d+: error' -or
+              $_ -match 'error: could not compile'
+            }
+            foreach ($e in ($diag | Select-Object -First 100)) { Write-Host "::error title=rustc::$($e.Trim())" }
+            # 2) the tail, so a failure with no parsed diagnostic is still visible
+            $i = 0
+            foreach ($t in ($all | Select-Object -Last 45)) {
+              $i++
+              Write-Host "::error title=tail-$i::$($t.Trim())"
+            }
             Write-Host "::error title=clippy::cargo clippy exited with code $code"
             exit 1
           }
