@@ -936,16 +936,6 @@ export component AppWindow inherits Window {
     in-out property <bool> dragging: false;
     in-out property <string> summary: "No files queued";
 
-    // Behind everything: resets the hint bar when the pointer is over empty
-    // chrome. Declared first so it can never intercept a real control.
-    TouchArea {
-        moved => {
-            Hint.text = root.items.length == 0
-                ? "Drag files onto the window, or press Ctrl+O to browse. Everything runs on this PC — nothing is uploaded."
-                : "Enter converts the queue. Click a card to select it, then press Delete to remove it.";
-        }
-    }
-
     // ---- implemented by Rust ----------------------------------------------
     callback browse-files();
     callback choose-output-dir();
@@ -961,6 +951,17 @@ export component AppWindow inherits Window {
     callback set-custom-output(bool);
     callback clear-queue();
     callback save-settings();
+
+    // Fill-the-window backdrop that resets the hint bar when the pointer is
+    // over empty chrome. It is declared before the content so it always sits
+    // *behind* every control and can never swallow a click.
+    TouchArea {
+        moved => {
+            Hint.text = root.items.length == 0
+                ? "Drag files onto the window, or press Ctrl+O to browse. Everything runs on this PC — nothing is uploaded."
+                : "Enter converts the queue. Click a card to select it, then press Delete to remove it.";
+        }
+    }
 
     VerticalLayout {
         preferred-width: 820px;
@@ -1114,15 +1115,18 @@ export component AppWindow inherits Window {
                         font-size: 11px;
                         vertical-alignment: center;
                     }
-                    if (root.items.length > 0 && !root.running) : Rectangle {
-                        min-width: clear-lbl.preferred-width + 12px;
-                        max-width: clear-lbl.preferred-width + 12px;
+                    // `visible`, not `if`: an id declared inside a conditional
+                    // body cannot be referenced by that body's own properties,
+                    // and both the width and the hover state need those ids.
+                    Rectangle {
+                        visible: root.items.length > 0 && !root.running;
+                        min-width: 64px;
+                        max-width: 64px;
                         min-height: 18px;
                         max-height: 18px;
                         border-radius: 4px;
                         background: clear-ta.has-hover ? Theme.surface-3 : transparent;
                         Text {
-                            id: clear-lbl;
                             text: "Clear all";
                             color: Theme.text-faint;
                             font-size: 10px;

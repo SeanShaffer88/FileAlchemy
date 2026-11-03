@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,17 @@ struct Job {
     token: CancelToken,
 }
 
+/// Lock the job registry.
+///
+/// A worker that panicked while holding the lock poisons it; recovering the
+/// guard keeps cancelling and event reporting working for every other job
+/// instead of turning one bad file into a dead app.
+fn lock_tokens(tokens: &Mutex<HashMap<u64, CancelToken>>) -> MutexGuard<'_, HashMap<u64, CancelToken>> {
+    tokens
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// The conversion engine. Cheap to own; all heavy state lives in the workers.
 pub struct Engine {
     ctx: Arc<EngineContext>,
@@ -65,19 +76,31 @@ impl Engine {
             let tx = tx.clone();
             let ctx = Arc::clone(&ctx);
             let tokens = Arc::clone(&tokens);
-            let handle = std::thread::Builder::new()
+            match std::thread::Builder::new()
                 .name(format!("filealchemy-worker-{index}"))
                 .spawn(move || worker_loop(job_rx, tx, ctx, tokens))
-                .expect("failed to spawn conversion worker");
-            workers.push(handle);
+            {
+                Ok(handle) => workers.push(handle),
+                // Out of memory or thread handles: run with fewer workers
+                // rather than taking the app down with a panic.
+                Err(e) => crate::platform::console::note(&format!(
+                    "FileAlchemy: could not start conversion worker {index}: {e}"
+                )),
+            }
         }
         drop(job_rx);
+
+        let threads = workers.len();
+        // With no worker there is nobody to convert anything; `submit` reports
+        // that instead of leaving an item stuck on "Queued" forever.
+        let job_tx = if threads == 0 { None } else { Some(job_tx) };
+
 
         Engine {
             ctx,
             tx,
             rx,
-            job_tx: Some(job_tx),
+            job_tx,
             tokens,
             workers,
             threads,
@@ -92,25 +115,29 @@ impl Engine {
     /// the worker needs no access to settings.
     pub fn submit(&self, req: TaskRequest) -> Result<(), EngineError> {
         let token = new_cancel_token();
-        self.tokens.lock().unwrap().insert(req.id, Arc::clone(&token));
+        lock_tokens(&self.tokens).insert(req.id, Arc::clone(&token));
         let job = Job { req, token };
         self.job_tx
             .as_ref()
-            .ok_or_else(|| EngineError::Internal("engine is shutting down".into()))?
+            // Either the engine is shutting down or no worker thread could be
+            // started at all (see `new`).
+            .ok_or_else(|| {
+                EngineError::Internal("no conversion worker is available".into())
+            })?
             .send(job)
             .map_err(|_| EngineError::Internal("conversion queue is closed".into()))
     }
 
     /// Request cancellation of one job (running or still queued).
     pub fn cancel(&self, id: u64) {
-        if let Some(token) = self.tokens.lock().unwrap().get(&id) {
+        if let Some(token) = lock_tokens(&self.tokens).get(&id) {
             token.store(true, Ordering::SeqCst);
         }
     }
 
     /// Request cancellation of everything (Esc / Cancel All).
     pub fn cancel_all(&self) {
-        for token in self.tokens.lock().unwrap().values() {
+        for token in lock_tokens(&self.tokens).values() {
             token.store(true, Ordering::SeqCst);
         }
     }
@@ -118,7 +145,7 @@ impl Engine {
     /// Number of jobs currently registered (running or queued).
     #[allow(dead_code)]
     pub fn active_tasks(&self) -> usize {
-        self.tokens.lock().unwrap().len()
+        lock_tokens(&self.tokens).len()
     }
 
     /// Non-blocking event drain, called from the UI timer.
@@ -163,7 +190,7 @@ fn worker_loop(
 
         // Skipped before it starts: the user removed it while it was queued.
         if job.token.load(Ordering::SeqCst) {
-            tokens.lock().unwrap().remove(&id);
+            lock_tokens(&tokens).remove(&id);
             let _ = tx.send(EngineEvent::Cancelled { id });
             ctx.scratch.release_task(id);
             continue;
@@ -215,7 +242,7 @@ fn worker_loop(
 
         // Always scrub: success, failure or cancellation.
         ctx.scratch.release_task(id);
-        tokens.lock().unwrap().remove(&id);
+        lock_tokens(&tokens).remove(&id);
     }
 }
 

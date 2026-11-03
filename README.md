@@ -33,11 +33,14 @@ Most "free online converters" are a privacy trade: your tax return, your medical
 
 | Category | Inputs | Targets | Engine |
 |---|---|---|---|
-| **Images** | PNG, JPG, WebP, BMP, TIFF, GIF, ICO, SVG, AVIF, QOI | PNG, JPG, WebP, AVIF, BMP, ICO, PDF | in-process Rust (`image`, `resvg`, `ravif`) |
+| **Images** | PNG, JPG, WebP, BMP, TIFF, GIF, ICO, SVG, QOI | PNG, JPG, WebP, AVIF, BMP, ICO, PDF | in-process Rust (`image`, `resvg`, `ravif`) |
 | **Video** | MP4, MKV, MOV, AVI, WebM | MP4 (H.264), WebM (VP9), GIF, plus audio-only MP3/WAV/FLAC/M4A | `bin/ffmpeg.exe` |
 | **Audio** | MP3, WAV, FLAC, AAC, OGG, M4A | MP3, WAV, FLAC, M4A | `bin/ffmpeg.exe` |
 | **Documents** | PDF, DOCX, EPUB, MD, TXT, HTML, RTF, CSV, JSON | DOCX, Markdown, HTML, TXT, EPUB, PNG (per PDF page) | `bin/pandoc.exe`, `bin/pdftoppm.exe`, native CSV/JSON/RTF paths |
 | **Archives** | ZIP, 7Z, TAR, GZ, TAR.GZ | ZIP, 7Z, TAR.GZ, or extract to a folder | in-process Rust (`zip`, `sevenz-rust`, `flate2`, `tar`) |
+
+AVIF is an output format only: decoding it would need a C codec (dav1d), so an
+`.avif` input reports exactly that instead of failing obscurely.
 
 Quality presets (`Balanced`, `Smaller file`, `High quality`, `Lossless`) and output resolution (Original / 1080p / 720p / 480p / Half) are per file. Target lists are filtered per file, so you are never offered a conversion that cannot work.
 
