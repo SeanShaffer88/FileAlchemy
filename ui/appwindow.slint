@@ -1,0 +1,1388 @@
+// =============================================================================
+//  FileAlchemy — ui/appwindow.slint
+//
+//  Single-window, dark, fully keyboard navigable UI.
+//
+//  Layout rules followed throughout (Slint is strict about these):
+//   * Sizes of items that live *inside* a layout are constrained with
+//     min-/max-width/height. A layout owns the geometry of its children, so
+//     plain `width:`/`height:` bindings would be overridden.
+//   * Small items that must be vertically centred in a row are wrapped in a
+//     `VerticalLayout { alignment: center; … }`.
+//   * `horizontal-alignment` / `vertical-alignment` are only used on `Text`.
+//
+//  Design notes (rationale in docs/ARCHITECTURE.md):
+//   * Everything except the virtualized list is custom drawn, so the window has
+//     one consistent look in the software renderer (no GPU / OpenGL required).
+//   * The queue is a ListView, so only visible rows exist in the item tree: a
+//     10 000 file queue costs the same as a 10 file queue.
+//   * Rows are a fixed 118px tall. Instead of growing a row (which destabilises
+//     virtualization) the "Tune" and format buttons swap the card face between
+//     Summary / Formats / Tune — all three share one height.
+//   * Browser-style tooltips are replaced by a persistent hint bar plus
+//     accessible-description: hovering OR keyboard-focusing any control
+//     explains it in plain English. Popup-free, screen-reader friendly, and it
+//     can never be clipped by the scroll viewport or the screen edge.
+// =============================================================================
+
+import { ListView } from "std-widgets.slint";
+
+// -----------------------------------------------------------------------------
+//  Data model
+// -----------------------------------------------------------------------------
+
+export struct QueueItem {
+    id: int,
+    name: string,
+    detail: string,            // secondary line: size / type / evidence, output, or error
+    mime: string,
+    category: string,          // "image" | "video" | "audio" | "document" | "archive"
+    category-label: string,    // human label shown in the badge
+    format-profile: string,    // "image" | "video" | "audio" | "text" | "pdf" | "archive"
+    target: string,            // display label of the selected target format
+    target-index: int,
+    preset-index: int,
+    resolution-index: int,
+    face: string,              // "summary" | "formats" | "tune"
+    progress: float,           // 0.0 .. 1.0
+    indeterminate: bool,
+    status: string,            // "queued" | "running" | "done" | "failed" | "cancelled"
+    status-label: string,      // pre-formatted by Rust ("Ready", "42%", "Done")
+    selected: bool,
+}
+
+// -----------------------------------------------------------------------------
+//  Palette
+// -----------------------------------------------------------------------------
+
+export global Theme {
+    out property <color> bg: #14161a;
+    out property <color> surface: #1b1e24;
+    out property <color> surface-2: #22262e;
+    out property <color> surface-3: #2c313b;
+    out property <color> border: #333a46;
+    out property <color> text: #e9edf3;
+    out property <color> text-dim: #9aa4b2;
+    out property <color> text-faint: #6c7686;
+    out property <color> accent: #4f9cf9;
+    out property <color> accent-dim: #2b6fd0;
+    out property <color> ok: #3fb950;
+    out property <color> warn: #d29922;
+    out property <color> bad: #f05252;
+    out property <length> radius: 10px;
+}
+
+/// Single global sink for the plain-English explanations. Any control can push
+/// text here on hover/focus without threading callbacks through every layer.
+export global Hint {
+    in-out property <string> text: "Drag files onto the window, or press Ctrl+O to browse. Everything runs on this PC — nothing is uploaded.";
+}
+
+/// Static option lists, filled from Rust (engine::formats) at startup so the UI
+/// and the conversion engine can never disagree about which targets exist.
+export global Options {
+    in property <[string]> image-formats: [];
+    in property <[string]> video-formats: [];
+    in property <[string]> audio-formats: [];
+    in property <[string]> text-formats: [];
+    in property <[string]> pdf-formats: [];
+    in property <[string]> archive-formats: [];
+    in property <[string]> image-format-helps: [];
+    in property <[string]> video-format-helps: [];
+    in property <[string]> audio-format-helps: [];
+    in property <[string]> text-format-helps: [];
+    in property <[string]> pdf-format-helps: [];
+    in property <[string]> archive-format-helps: [];
+    in property <[string]> presets: [];
+    in property <[string]> preset-helps: [];
+    in property <[string]> resolutions: [];
+    in property <[string]> resolution-helps: [];
+    in property <[string]> concurrency: ["1", "2", "4", "8"];
+    in property <[string]> collisions: ["Auto-rename", "Overwrite"];
+}
+
+// -----------------------------------------------------------------------------
+//  Primitive controls
+// -----------------------------------------------------------------------------
+
+/// Text pill used for target formats, presets, resolutions and settings values.
+component Chip inherits Rectangle {
+    in property <string> label <=> lbl.text;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+    in property <string> help;
+    callback clicked();
+
+    min-height: 24px;
+    max-height: 24px;
+    min-width: 52px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: (selected || fs.has-focus) ? Theme.accent
+        : (ta.has-hover && enabled ? Theme.text-faint : Theme.border);
+    background: selected ? Theme.accent-dim
+        : (ta.has-hover && enabled ? Theme.surface-3 : Theme.surface-2);
+    opacity: enabled ? 1.0 : 0.45;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-description: help;
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            id: lbl;
+            color: root.selected ? #ffffff : Theme.text-dim;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        moved => { Hint.text = root.help; }
+        clicked => { root.clicked(); }
+    }
+
+    fs := FocusScope {
+        focusable: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+}
+
+/// Square glyph button. Glyphs only — no image assets, so the portable build
+/// stays a single self-contained folder.
+component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <string> help;
+    callback clicked();
+
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    border-radius: 6px;
+    background: (ta.has-hover || fs.has-focus) ? Theme.surface-3 : transparent;
+    accessible-role: button;
+    accessible-label: help;
+    accessible-description: help;
+
+    Text {
+        text: root.glyph;
+        color: (ta.has-hover || fs.has-focus) ? Theme.text : Theme.text-dim;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        moved => { Hint.text = root.help; }
+        clicked => { root.clicked(); }
+    }
+
+    fs := FocusScope {
+        focusable: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+}
+
+component TextButton inherits Rectangle {
+    in property <string> label <=> lbl.text;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    in property <string> help;
+    callback clicked();
+
+    min-height: 32px;
+    max-height: 32px;
+    min-width: 96px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: primary ? Theme.accent : (danger ? Theme.bad : (fs.has-focus ? Theme.accent : Theme.border));
+    background: primary
+        ? (ta.has-hover ? #62a9ff : Theme.accent)
+        : (ta.has-hover && enabled ? Theme.surface-3 : Theme.surface-2);
+    opacity: enabled ? 1.0 : 0.4;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.help;
+
+    HorizontalLayout {
+        alignment: center;
+        padding-left: 14px;
+        padding-right: 14px;
+        Text {
+            id: lbl;
+            color: root.primary ? #0b1220 : (root.danger ? Theme.bad : Theme.text);
+            font-size: 12px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        moved => { Hint.text = root.help; }
+        clicked => { root.clicked(); }
+    }
+
+    fs := FocusScope {
+        focusable: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+}
+
+component Toggle inherits Rectangle {
+    in-out property <bool> checked: false;
+    in property <string> label <=> lbl.text;
+    in property <string> help;
+    callback toggled(bool);
+
+    min-height: 24px;
+    max-height: 24px;
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-description: root.help;
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                min-width: 15px;
+                max-width: 15px;
+                min-height: 15px;
+                max-height: 15px;
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: (root.checked || fs.has-focus) ? Theme.accent : Theme.border;
+                background: root.checked ? Theme.accent : Theme.surface-2;
+                Text {
+                    text: root.checked ? "✓" : "";
+                    color: #0b1220;
+                    font-size: 11px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        Text {
+            id: lbl;
+            color: Theme.text;
+            font-size: 12px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        moved => { Hint.text = root.help; }
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+
+    fs := FocusScope {
+        focusable: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+                return accept;
+            }
+            reject
+        }
+    }
+}
+
+component ProgressBar inherits Rectangle {
+    in property <float> value: 0.0;
+    in property <bool> indeterminate: false;
+    in property <string> status: "queued";
+    in property <float> phase: 0.0;
+
+    min-height: 6px;
+    max-height: 6px;
+    border-radius: 3px;
+    background: Theme.surface-3;
+    clip: true;
+
+    // A timer rather than an animation: Slint animations need a changing
+    // binding, and this must keep sweeping while the UI thread idles waiting
+    // for worker progress.
+    Timer {
+        interval: 60ms;
+        running: root.indeterminate;
+        triggered => {
+            root.phase += 0.035;
+            if (root.phase > 1.0) { root.phase = 0.0; }
+        }
+    }
+
+    Rectangle {
+        x: root.indeterminate ? (root.phase * (root.width * 1.3) - root.width * 0.3) : 0px;
+        width: root.indeterminate ? root.width * 0.3 : root.value * root.width;
+        height: parent.height;
+        border-radius: 3px;
+        background: root.status == "failed" ? Theme.bad
+            : root.status == "done" ? Theme.ok
+            : root.status == "cancelled" ? Theme.warn
+            : Theme.accent;
+    }
+}
+
+/// Plain-English help affordance: hover writes into the hint bar.
+component HelpDot inherits Rectangle {
+    in property <string> help;
+    min-width: 15px;
+    max-width: 15px;
+    min-height: 15px;
+    max-height: 15px;
+    border-radius: 8px;
+    background: Theme.surface-3;
+    border-width: 1px;
+    border-color: Theme.border;
+    accessible-role: text;
+    accessible-label: help;
+
+    Text {
+        text: "?";
+        color: Theme.text-dim;
+        font-size: 10px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        mouse-cursor: help;
+        moved => { Hint.text = root.help; }
+    }
+}
+
+/// Two rows of target-format chips. The widest profile has 7 targets, so the
+/// split is 4 + remainder.
+/// One row of target-format pills. `helps` runs parallel to `options` so the
+/// plain-English explanation always comes from the same table as the label.
+component FormatRows inherits VerticalLayout {
+    in property <[string]> options: [];
+    in property <[string]> helps: [];
+    in property <int> selected: 0;
+    in property <string> file-name: "";
+    callback pick(int);
+
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 6px;
+        for f[i] in root.options : Chip {
+            label: f;
+            visible: i < 4;
+            selected: i == root.selected;
+            help: i < root.helps.length ? root.helps[i] : "Convert " + root.file-name + " to " + f + ".";
+            clicked => { root.pick(i); }
+        }
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        for f[i] in root.options : Chip {
+            label: f;
+            visible: i >= 4;
+            selected: i == root.selected;
+            help: i < root.helps.length ? root.helps[i] : "Convert " + root.file-name + " to " + f + ".";
+            clicked => { root.pick(i); }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+//  Queue card
+// -----------------------------------------------------------------------------
+
+component QueueCard inherits Rectangle {
+    in property <QueueItem> data;
+
+    callback remove(int);
+    callback face(int, string);
+    callback format-picked(int, int);
+    callback preset-picked(int, int);
+    callback resolution-picked(int, int);
+    callback selected(int);
+
+    height: 118px;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: data.selected ? Theme.accent : Theme.border;
+    background: Theme.surface;
+
+    // Declared first so it stays *behind* the interactive controls.
+    TouchArea {
+        clicked => { root.selected(root.data.id); }
+        moved => { Hint.text = root.data.name + " · " + root.data.mime + " · " + root.data.detail; }
+    }
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        // ---- row 1: identity + face switches -------------------------------
+        HorizontalLayout {
+            spacing: 8px;
+
+            VerticalLayout {
+                spacing: 1px;
+                horizontal-stretch: 1;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: root.data.name;
+                        color: Theme.text;
+                        font-size: 13px;
+                        font-weight: 600;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Rectangle {
+                        min-width: cat-lbl.preferred-width + 12px;
+                        max-width: cat-lbl.preferred-width + 12px;
+                        min-height: 16px;
+                        max-height: 16px;
+                        border-radius: 4px;
+                        background: Theme.surface-3;
+                        Text {
+                            id: cat-lbl;
+                            text: root.data.category-label;
+                            color: Theme.text-dim;
+                            font-size: 9px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+                Text {
+                    text: root.data.detail;
+                    color: root.data.status == "failed" ? Theme.bad : Theme.text-faint;
+                    font-size: 11px;
+                    overflow: elide;
+                }
+            }
+
+            // current target format — opens the formats face
+            Rectangle {
+                min-width: 128px;
+                max-width: 128px;
+                min-height: 24px;
+                max-height: 24px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: fmt-ta.has-hover ? Theme.accent : Theme.border;
+                background: fmt-ta.has-hover ? Theme.surface-3 : Theme.surface-2;
+                accessible-role: button;
+                accessible-label: "Target format: " + root.data.target;
+                accessible-description: "Choose what this file will be converted to.";
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 4px;
+                    alignment: center;
+                    Text {
+                        text: root.data.target;
+                        color: Theme.text;
+                        font-size: 11px;
+                        font-weight: 600;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: "▾";
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                fmt-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    moved => {
+                        Hint.text = "Target format: " + root.data.target + ". Click to list every format this kind of file can become.";
+                    }
+                    clicked => {
+                        root.selected(root.data.id);
+                        root.face(root.data.id, root.data.face == "formats" ? "summary" : "formats");
+                    }
+                }
+            }
+
+            Rectangle {
+                min-width: 58px;
+                max-width: 58px;
+                min-height: 24px;
+                max-height: 24px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: tune-ta.has-hover ? Theme.accent : Theme.border;
+                background: (root.data.face == "tune" || tune-ta.has-hover) ? Theme.surface-3 : Theme.surface-2;
+                accessible-role: button;
+                accessible-label: "Tune quality and size";
+                accessible-description: "Quality preset and output resolution for this file.";
+
+                Text {
+                    text: "Tune";
+                    color: Theme.text-dim;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                tune-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    moved => {
+                        Hint.text = "Tune: quality preset (Balanced / Smaller file / High quality / Lossless) and output resolution — for this file only.";
+                    }
+                    clicked => {
+                        root.selected(root.data.id);
+                        root.face(root.data.id, root.data.face == "tune" ? "summary" : "tune");
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    glyph: root.data.status == "running" ? "■" : "✕";
+                    help: root.data.status == "running"
+                        ? "Cancel this conversion. Partial output is deleted immediately."
+                        : "Remove this file from the queue (Delete key). Files on disk are untouched.";
+                    clicked => { root.remove(root.data.id); }
+                }
+            }
+        }
+
+        // ---- row 2: exactly one face ---------------------------------------
+        if (root.data.face == "formats" && root.data.format-profile == "image") : FormatRows {
+            options: Options.image-formats;
+            helps: Options.image-format-helps;
+            selected: root.data.target-index;
+            file-name: root.data.name;
+            pick(i) => { root.format-picked(root.data.id, i); }
+        }
+        if (root.data.face == "formats" && root.data.format-profile == "video") : FormatRows {
+            options: Options.video-formats;
+            helps: Options.video-format-helps;
+            selected: root.data.target-index;
+            file-name: root.data.name;
+            pick(i) => { root.format-picked(root.data.id, i); }
+        }
+        if (root.data.face == "formats" && root.data.format-profile == "audio") : FormatRows {
+            options: Options.audio-formats;
+            helps: Options.audio-format-helps;
+            selected: root.data.target-index;
+            file-name: root.data.name;
+            pick(i) => { root.format-picked(root.data.id, i); }
+        }
+        if (root.data.face == "formats" && root.data.format-profile == "text") : FormatRows {
+            options: Options.text-formats;
+            helps: Options.text-format-helps;
+            selected: root.data.target-index;
+            file-name: root.data.name;
+            pick(i) => { root.format-picked(root.data.id, i); }
+        }
+        if (root.data.face == "formats" && root.data.format-profile == "pdf") : FormatRows {
+            options: Options.pdf-formats;
+            helps: Options.pdf-format-helps;
+            selected: root.data.target-index;
+            file-name: root.data.name;
+            pick(i) => { root.format-picked(root.data.id, i); }
+        }
+        if (root.data.face == "formats" && root.data.format-profile == "archive") : FormatRows {
+            options: Options.archive-formats;
+            helps: Options.archive-format-helps;
+            selected: root.data.target-index;
+            file-name: root.data.name;
+            pick(i) => { root.format-picked(root.data.id, i); }
+        }
+
+        if (root.data.face == "tune") : VerticalLayout {
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: "Quality";
+                    min-width: 54px;
+                    max-width: 54px;
+                    color: Theme.text-faint;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+                for p[i] in Options.presets : Chip {
+                    label: p;
+                    selected: i == root.data.preset-index;
+                    help: i < Options.preset-helps.length ? Options.preset-helps[i] : p;
+                    clicked => { root.preset-picked(root.data.id, i); }
+                }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: "Resize";
+                    min-width: 54px;
+                    max-width: 54px;
+                    color: Theme.text-faint;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+                for r[i] in Options.resolutions : Chip {
+                    label: r;
+                    selected: i == root.data.resolution-index;
+                    help: i < Options.resolution-helps.length ? Options.resolution-helps[i] : r;
+                    clicked => { root.resolution-picked(root.data.id, i); }
+                }
+            }
+        }
+
+        if (root.data.face == "summary") : HorizontalLayout {
+            spacing: 10px;
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                ProgressBar {
+                    value: root.data.progress;
+                    indeterminate: root.data.indeterminate;
+                    status: root.data.status;
+                }
+            }
+            Text {
+                text: root.data.status-label;
+                min-width: 62px;
+                max-width: 62px;
+                color: root.data.status == "failed" ? Theme.bad
+                    : root.data.status == "done" ? Theme.ok
+                    : root.data.status == "running" ? Theme.accent
+                    : root.data.status == "cancelled" ? Theme.warn
+                    : Theme.text-faint;
+                font-size: 11px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+//  Drop zone
+// -----------------------------------------------------------------------------
+
+component DropZone inherits Rectangle {
+    in property <bool> compact: false;
+    in property <int> queue-len: 0;
+    in property <bool> dragging: false;
+    callback browse();
+
+    min-height: root.compact ? 56px : 104px;
+    max-height: root.compact ? 56px : 104px;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: (root.dragging || ta.has-hover) ? Theme.accent : Theme.border;
+    background: root.dragging ? Theme.surface-3 : Theme.surface;
+    accessible-role: button;
+    accessible-label: "Add files";
+    accessible-description: "Drag files here, or press Ctrl+O to choose files to convert.";
+
+    // Behind the controls.
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        moved => { Hint.text = "Drag files or whole folders here from Explorer, or use Browse Files (Ctrl+O)."; }
+        clicked => { root.browse(); }
+    }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+        Text {
+            text: root.compact ? "Drop more files here" : "Drag files here to convert";
+            color: Theme.text;
+            font-size: root.compact ? 12px : 15px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+        if (!root.compact) : Text {
+            text: "Images · Audio · Video · Documents · Archives — converted on this PC, never uploaded";
+            color: Theme.text-faint;
+            font-size: 11px;
+            horizontal-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                min-width: 118px;
+                max-width: 118px;
+                min-height: 26px;
+                max-height: 26px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: browse-ta.has-hover ? Theme.surface-3 : Theme.surface-2;
+                Text {
+                    text: root.queue-len == 0 ? "Browse Files…" : "Add Files…";
+                    color: Theme.text;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                browse-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    moved => { Hint.text = "Browse for files (Ctrl+O). You can select several files at once."; }
+                    clicked => { root.browse(); }
+                }
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+//  Settings overlay
+// -----------------------------------------------------------------------------
+
+component SettingsPanel inherits Rectangle {
+    in-out property <bool> open: false;
+    in property <int> concurrency-index: 1;
+    in property <bool> shell-menu: false;
+    in property <bool> play-sound: true;
+    in property <bool> flash-taskbar: true;
+    in property <bool> purge-temp: true;
+
+    callback close();
+    callback concurrency-picked(int);
+    callback shell-menu-toggled(bool);
+    callback play-sound-toggled(bool);
+    callback flash-taskbar-toggled(bool);
+    callback purge-temp-toggled(bool);
+
+    visible: root.open;
+
+    Rectangle {
+        background: #000000aa;
+        TouchArea { clicked => { root.close(); } }
+    }
+
+    VerticalLayout {
+        alignment: center;
+        Rectangle {
+            min-width: 520px;
+            max-width: 520px;
+            min-height: 424px;
+            max-height: 424px;
+            background: Theme.surface;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    Text {
+                        text: "Settings";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    IconButton {
+                        glyph: "✕";
+                        help: "Close settings. Every change is saved immediately.";
+                        clicked => { root.close(); }
+                    }
+                }
+
+                Text {
+                    text: "Stored in config.json inside the portable data folder, or in %LOCALAPPDATA%\\FileAlchemy for installed copies.";
+                    color: Theme.text-faint;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                    min-height: 30px;
+                }
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    Text {
+                        text: "Parallel jobs";
+                        min-width: 100px;
+                        max-width: 100px;
+                        color: Theme.text-dim;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                    for c[i] in Options.concurrency : Chip {
+                        label: c;
+                        selected: i == root.concurrency-index;
+                        help: "How many files convert at the same time. Higher is faster on modern CPUs but uses more memory and disk throughput.";
+                        clicked => { root.concurrency-picked(i); }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        HelpDot {
+                            help: "Parallel jobs: each file converts on its own worker thread or child process. 4 is a good default for an 8-core CPU.";
+                        }
+                    }
+                }
+
+                Toggle {
+                    label: "Add “Convert with FileAlchemy” to the Explorer right-click menu";
+                    checked: root.shell-menu;
+                    help: "Per-user Explorer context menu entry. No administrator rights, no UAC prompt, nothing written outside your user profile.";
+                    toggled(v) => { root.shell-menu-toggled(v); }
+                }
+                Toggle {
+                    label: "Play a chime when the queue finishes";
+                    checked: root.play-sound;
+                    help: "A short, quiet Windows notification sound plays once the whole queue is done.";
+                    toggled(v) => { root.play-sound-toggled(v); }
+                }
+                Toggle {
+                    label: "Flash the taskbar button when the queue finishes";
+                    checked: root.flash-taskbar;
+                    help: "Flashes the taskbar button so you notice completion while working in another window.";
+                    toggled(v) => { root.flash-taskbar-toggled(v); }
+                }
+                Toggle {
+                    label: "Delete partial files at once when a conversion is cancelled";
+                    checked: root.purge-temp;
+                    help: "Cancelling deletes the half-written temporary file immediately instead of leaving it in the temp folder until exit.";
+                    toggled(v) => { root.purge-temp-toggled(v); }
+                }
+
+                Rectangle { min-height: 1px; max-height: 1px; background: Theme.border; }
+
+                Text {
+                    text: "FileAlchemy 1.0 · 100% offline · no telemetry, no account, no network access";
+                    color: Theme.text-faint;
+                    font-size: 10px;
+                    min-height: 14px;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    TextButton {
+                        label: "Done";
+                        primary: true;
+                        help: "Close settings (Esc).";
+                        clicked => { root.close(); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+//  Main window
+// -----------------------------------------------------------------------------
+
+export component AppWindow inherits Window {
+    title: "FileAlchemy";
+    background: Theme.bg;
+    default-font-family: "Segoe UI";
+    default-font-size: 12px;
+
+    in-out property <[QueueItem]> items: [];
+    in-out property <int> collision-index: 0;
+    in-out property <bool> custom-output: false;
+    in-out property <string> custom-output-path: "";
+    in-out property <bool> settings-open: false;
+    in-out property <int> concurrency-index: 1;
+    in-out property <bool> shell-menu: false;
+    in-out property <bool> play-sound: true;
+    in-out property <bool> flash-taskbar: true;
+    in-out property <bool> purge-temp: true;
+    in-out property <bool> running: false;
+    in-out property <bool> dragging: false;
+    in-out property <string> summary: "No files queued";
+
+    // Behind everything: resets the hint bar when the pointer is over empty
+    // chrome. Declared first so it can never intercept a real control.
+    TouchArea {
+        moved => {
+            Hint.text = root.items.length == 0
+                ? "Drag files onto the window, or press Ctrl+O to browse. Everything runs on this PC — nothing is uploaded."
+                : "Enter converts the queue. Click a card to select it, then press Delete to remove it.";
+        }
+    }
+
+    // ---- implemented by Rust ----------------------------------------------
+    callback browse-files();
+    callback choose-output-dir();
+    callback convert-all();
+    callback cancel-all();
+    callback remove-item(int);
+    callback select-item(int);
+    callback set-face(int, string);
+    callback set-target(int, int);
+    callback set-preset(int, int);
+    callback set-resolution(int, int);
+    callback set-collision(int);
+    callback set-custom-output(bool);
+    callback clear-queue();
+    callback save-settings();
+
+    VerticalLayout {
+        preferred-width: 820px;
+        preferred-height: 600px;
+        min-width: 720px;
+        min-height: 480px;
+
+        // =================== 1. Header ======================================
+        Rectangle {
+            min-height: 52px;
+            max-height: 52px;
+            background: Theme.surface;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 10px;
+                spacing: 10px;
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        min-width: 26px;
+                        max-width: 26px;
+                        min-height: 26px;
+                        max-height: 26px;
+                        border-radius: 7px;
+                        background: Theme.accent;
+                        Text {
+                            text: "⚗";
+                            color: #0b1220;
+                            font-size: 15px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 0px;
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: "FileAlchemy";
+                        color: Theme.text;
+                        font-size: 14px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: "Universal file converter";
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        min-width: offline-lbl.preferred-width + 24px;
+                        max-width: offline-lbl.preferred-width + 24px;
+                        min-height: 22px;
+                        max-height: 22px;
+                        border-radius: 11px;
+                        border-width: 1px;
+                        border-color: #2b4a33;
+                        background: #16241a;
+                        accessible-role: text;
+                        accessible-label: "Offline. No network requests are ever made.";
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    min-width: 6px;
+                                    max-width: 6px;
+                                    min-height: 6px;
+                                    max-height: 6px;
+                                    border-radius: 3px;
+                                    background: Theme.ok;
+                                }
+                            }
+                            Text {
+                                id: offline-lbl;
+                                text: "100% offline";
+                                color: Theme.ok;
+                                font-size: 10px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        TouchArea {
+                            mouse-cursor: help;
+                            moved => {
+                                Hint.text = "Air-gapped by design: FileAlchemy makes no network requests, has no telemetry, and never checks for updates.";
+                            }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        glyph: "⚙";
+                        help: "Settings: parallel jobs, Explorer menu, completion alerts (Ctrl+,).";
+                        clicked => { root.settings-open = true; }
+                    }
+                }
+            }
+        }
+
+        // =================== 2. Drop zone ===================================
+        Rectangle {
+            padding: 12px;
+            VerticalLayout {
+                DropZone {
+                    compact: root.items.length > 0;
+                    queue-len: root.items.length;
+                    dragging: root.dragging;
+                    browse => { root.browse-files(); }
+                }
+            }
+        }
+
+        // =================== 3. Queue =======================================
+        Rectangle {
+            background: Theme.bg;
+            clip: true;
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: 4px;
+                spacing: 6px;
+
+                HorizontalLayout {
+                    min-height: 18px;
+                    max-height: 18px;
+                    spacing: 6px;
+                    Text {
+                        text: root.summary;
+                        color: Theme.text-dim;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.running ? "Working…" : "";
+                        color: Theme.accent;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                    if (root.items.length > 0 && !root.running) : Rectangle {
+                        min-width: clear-lbl.preferred-width + 12px;
+                        max-width: clear-lbl.preferred-width + 12px;
+                        min-height: 18px;
+                        max-height: 18px;
+                        border-radius: 4px;
+                        background: clear-ta.has-hover ? Theme.surface-3 : transparent;
+                        Text {
+                            id: clear-lbl;
+                            text: "Clear all";
+                            color: Theme.text-faint;
+                            font-size: 10px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        clear-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            moved => { Hint.text = "Remove every file from the queue without converting anything. Files on disk are untouched."; }
+                            clicked => { root.clear-queue(); }
+                        }
+                    }
+                }
+
+                if (root.items.length == 0) : Rectangle {
+                    vertical-stretch: 1;
+                    border-radius: Theme.radius;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    background: Theme.surface;
+                    Text {
+                        text: "Your queue is empty.\n\nDrop files above, or press Ctrl+O to browse.\nEach file is detected by its real content, and offered only the formats it can actually become.";
+                        color: Theme.text-faint;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                lv := ListView {
+                    visible: root.items.length > 0;
+                    vertical-stretch: 1;
+                    for item[i] in root.items : QueueCard {
+                        width: lv.width;
+                        data: item;
+                        remove(id) => { root.remove-item(id); }
+                        face(id, f) => { root.set-face(id, f); }
+                        format-picked(id, idx) => { root.set-target(id, idx); }
+                        preset-picked(id, idx) => { root.set-preset(id, idx); }
+                        resolution-picked(id, idx) => { root.set-resolution(id, idx); }
+                        selected(id) => { root.select-item(id); }
+                    }
+                }
+            }
+        }
+
+        // =================== 4. Hint bar ====================================
+        Rectangle {
+            min-height: 26px;
+            max-height: 26px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 8px;
+                Text {
+                    text: "ⓘ";
+                    color: Theme.text-faint;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: Hint.text;
+                    color: Theme.text-dim;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // =================== 5. Footer ======================================
+        Rectangle {
+            min-height: 88px;
+            max-height: 88px;
+            background: Theme.surface;
+
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    min-height: 24px;
+                    max-height: 24px;
+                    spacing: 8px;
+
+                    Text {
+                        text: "Save to";
+                        color: Theme.text-faint;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        min-width: same-lbl.preferred-width + 30px;
+                        max-width: same-lbl.preferred-width + 30px;
+                        min-height: 24px;
+                        max-height: 24px;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: !root.custom-output ? Theme.accent : Theme.border;
+                        background: !root.custom-output ? Theme.accent-dim : (same-ta.has-hover ? Theme.surface-3 : Theme.surface-2);
+                        accessible-role: button;
+                        accessible-label: "Same folder as the source file";
+
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 5px;
+                            Text {
+                                text: !root.custom-output ? "●" : "○";
+                                color: !root.custom-output ? #ffffff : Theme.text-faint;
+                                font-size: 8px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                id: same-lbl;
+                                text: "Same folder as source";
+                                color: !root.custom-output ? #ffffff : Theme.text-dim;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+                        }
+                        same-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            moved => { Hint.text = "Write each converted file next to its source file. Originals are never modified or deleted."; }
+                            clicked => { root.set-custom-output(false); }
+                        }
+                    }
+
+                    Rectangle {
+                        min-height: 24px;
+                        max-height: 24px;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: root.custom-output ? Theme.accent : Theme.border;
+                        background: root.custom-output ? Theme.accent-dim : (cust-ta.has-hover ? Theme.surface-3 : Theme.surface-2);
+                        accessible-role: button;
+                        accessible-label: "A folder you choose";
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 5px;
+                            alignment: center;
+                            Text {
+                                text: root.custom-output ? "●" : "○";
+                                color: root.custom-output ? #ffffff : Theme.text-faint;
+                                font-size: 8px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: root.custom-output
+                                    ? (root.custom-output-path == "" ? "Choose folder…" : root.custom-output-path)
+                                    : "Custom folder…";
+                                color: root.custom-output ? #ffffff : Theme.text-dim;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        cust-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            moved => { Hint.text = "Write every converted file into one folder of your choice. Click to pick or change that folder."; }
+                            clicked => {
+                                if (root.custom-output-path == "" || !root.custom-output) {
+                                    root.choose-output-dir();
+                                } else {
+                                    root.set-custom-output(true);
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    Text {
+                        text: "If the file exists";
+                        color: Theme.text-faint;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                    for c[i] in Options.collisions : Chip {
+                        label: c;
+                        selected: i == root.collision-index;
+                        help: i == 0
+                            ? "Auto-rename: an existing file is never touched. The new file becomes name_1.ext, name_2.ext, and so on."
+                            : "Overwrite: the existing file is replaced atomically (ReplaceFileW). There is no undo.";
+                        clicked => { root.set-collision(i); }
+                    }
+                }
+
+                HorizontalLayout {
+                    min-height: 32px;
+                    max-height: 32px;
+                    spacing: 10px;
+
+                    Text {
+                        text: root.running
+                            ? "Conversions are running. Esc cancels everything and deletes partial files."
+                            : "Enter converts · Esc cancels · Delete removes the selected file";
+                        color: Theme.text-faint;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+
+                    TextButton {
+                        label: "Cancel (Esc)";
+                        danger: true;
+                        enabled: root.running;
+                        help: "Stop every running conversion and delete partial output files.";
+                        clicked => { root.cancel-all(); }
+                    }
+                    TextButton {
+                        label: root.running ? "Converting…" : "Convert All (Enter)";
+                        primary: true;
+                        enabled: !root.running && root.items.length > 0;
+                        help: "Convert every file in the queue to its selected target format.";
+                        clicked => { root.convert-all(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // =================== Settings overlay ==================================
+    SettingsPanel {
+        open: root.settings-open;
+        concurrency-index: root.concurrency-index;
+        shell-menu: root.shell-menu;
+        play-sound: root.play-sound;
+        flash-taskbar: root.flash-taskbar;
+        purge-temp: root.purge-temp;
+
+        close => { root.settings-open = false; }
+        concurrency-picked(i) => {
+            root.concurrency-index = i;
+            root.save-settings();
+        }
+        shell-menu-toggled(v) => {
+            root.shell-menu = v;
+            root.save-settings();
+        }
+        play-sound-toggled(v) => {
+            root.play-sound = v;
+            root.save-settings();
+        }
+        flash-taskbar-toggled(v) => {
+            root.flash-taskbar = v;
+            root.save-settings();
+        }
+        purge-temp-toggled(v) => {
+            root.purge-temp = v;
+            root.save-settings();
+        }
+    }
+}

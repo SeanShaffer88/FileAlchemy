@@ -1,0 +1,32 @@
+# Build output
+/target
+**/*.rs.bk
+
+# Runtime state for portable builds — never committed.
+#
+# FileAlchemy writes config.json and temp/ here when it runs from a checkout,
+# so the repository stays clean and no user data is ever pushed.
+/data
+!/bin/README.md
+
+# Bundled CLI engines are fetched by scripts/fetch-engines.ps1 (they are large
+# third-party binaries; licensing and provenance live in bin/README.md).
+/bin/*.exe
+/bin/*.dll
+/bin/*.txt.tmp
+
+# Packaging output
+/dist
+/artifacts
+*.msi
+*.wixpdb
+/wix/obj
+/wix/bin
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.user
+Thumbs.db
+desktop.ini
+.DS_Store

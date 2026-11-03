@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileAlchemy — WiX v4 source  ->  FileAlchemy-v{VERSION}-x64-Setup.msi
+
+  Per-user MSI (Scope="perUser"): installs into %LOCALAPPDATA%\Programs\FileAlchemy
+  with no elevation prompt, matching the app's "never ask for admin" design.
+
+  Build:
+      wix build filealchemy.wxs -arch x64 ^
+          -d AppVersion=1.0.0 -d SourceRoot=..\dist\portable ^
+          -o ..\dist\FileAlchemy-v1.0.0-x64-Setup.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="FileAlchemy"
+           Manufacturer="Sean Shaffer"
+           Version="$(var.AppVersion)"
+           UpgradeCode="a7d1f2c4-95c3-4e1b-9c8a-2f5f3c7b6d10"
+           Scope="perUser"
+           Compressed="yes"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="FileAlchemy — offline universal file converter"
+                        Manufacturer="Sean Shaffer" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of FileAlchemy is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- %LOCALAPPDATA%\Programs\FileAlchemy -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="FileAlchemy" />
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="FileAlchemy" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentGroupRef Id="BundledEngines" />
+      <ComponentRef Id="LicenceFile" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <!-- Opt-out: set INSTALLSHELLMENU=0 to skip the Explorer menu. -->
+    <Property Id="INSTALLSHELLMENU" Value="1" />
+
+    <CustomAction Id="InstallShellMenu"
+                  FileRef="FileAlchemyExe"
+                  ExeCommand="--install-shell-menu"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+    <CustomAction Id="RemoveShellMenu"
+                  FileRef="FileAlchemyExe"
+                  ExeCommand="--uninstall-shell-menu"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="InstallShellMenu" After="InstallFiles"
+              Condition="NOT Installed AND INSTALLSHELLMENU = 1" />
+      <Custom Action="RemoveShellMenu" Before="RemoveFiles"
+              Condition="REMOVE ~= &quot;ALL&quot;" />
+    </InstallExecuteSequence>
+  </Package>
+
+  <Fragment>
+    <Component Id="MainExecutable" Directory="INSTALLFOLDER" Guid="3f2a9c81-4d1e-4b9f-8f0e-6c2b7a4d5e21">
+      <File Id="FileAlchemyExe"
+            Source="$(var.SourceRoot)\FileAlchemy.exe"
+            KeyPath="yes"
+            Checksum="yes" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <!-- bin\ holds ffmpeg.exe, pandoc.exe, pdftoppm.exe and poppler's DLLs. -->
+    <ComponentGroup Id="BundledEngines" Directory="INSTALLFOLDER">
+      <Files Include="$(var.SourceRoot)\bin\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <Component Id="LicenceFile" Directory="INSTALLFOLDER" Guid="c8b1d2e3-5a4f-4c7d-9b6e-1e0f2a3b4c55">
+      <File Id="LicenceTxt" Source="$(var.SourceRoot)\LICENSE.txt" KeyPath="yes" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="e4d5c6b7-8a9f-4e1d-a2b3-c4d5e6f70819">
+        <Shortcut Id="AppShortcut"
+                  Name="FileAlchemy"
+                  Description="Offline universal file converter"
+                  Target="[INSTALLFOLDER]FileAlchemy.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\FileAlchemy" Name="installed"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+  </Fragment>
+
+</Wix>

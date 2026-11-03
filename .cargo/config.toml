@@ -1,0 +1,16 @@
+# FileAlchemy ships a single self-contained FileAlchemy.exe with no Visual C++
+# redistributable requirement. The static CRT is enforced here (rather than as a
+# manual RUSTFLAGS export) so that `cargo build --release`, IDEs and CI all agree.
+#
+# The spec allows either this or RUSTFLAGS="-C target-feature=+crt-static"; this
+# file is authoritative. scripts/package.ps1 asserts the flag took effect by
+# checking that the produced binary does not import VCRUNTIME140.dll.
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[alias]
+xtest = "test --all-targets"

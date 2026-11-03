@@ -1,0 +1,44 @@
+{
+  "$comment": [
+    "Pinned build inputs for FileAlchemy. Hashes are verified by",
+    "scripts/fetch-engines.ps1 before anything is extracted into bin/.",
+    "A blank sha256 is treated as 'not yet reviewed' and blocks installation",
+    "unless the maintainer re-runs the script with -Update, which records the",
+    "observed hash deliberately instead of trusting it silently."
+  ],
+  "version": 1,
+  "updated": "2026-11-03",
+  "engines": [
+    {
+      "name": "ffmpeg",
+      "output": "ffmpeg.exe",
+      "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2025-12-15-13-00/ffmpeg-n7.1-latest-win64-lgpl-7.1.zip",
+      "archive": "ffmpeg-win64.zip",
+      "member": "ffmpeg.exe",
+      "sha256": "",
+      "license": "LGPL-2.1-or-later (lgpl build: no GPL-only encoders)",
+      "notes": "lgpl build keeps redistribution terms simple; includes libx264, libvpx, libopus, libmp3lame."
+    },
+    {
+      "name": "pandoc",
+      "output": "pandoc.exe",
+      "url": "https://github.com/jgm/pandoc/releases/download/3.6.3/pandoc-3.6.3-windows-x86_64.zip",
+      "archive": "pandoc-win64.zip",
+      "member": "pandoc.exe",
+      "sha256": "",
+      "license": "GPL-2.0-or-later",
+      "notes": "Single static executable; invoked as a separate process, so the GPL does not extend to FileAlchemy."
+    },
+    {
+      "name": "poppler",
+      "output": "pdftoppm.exe",
+      "url": "https://github.com/oschwartz10612/poppler-windows/releases/download/v24.08.0-0/Release-24.08.0-0.zip",
+      "archive": "poppler-win64.zip",
+      "member": "pdftoppm.exe",
+      "copy_siblings": true,
+      "sha256": "",
+      "license": "GPL-2.0-or-later",
+      "notes": "pdftoppm.exe needs the sibling poppler DLLs; the packaging script copies them next to it."
+    }
+  ]
+}
