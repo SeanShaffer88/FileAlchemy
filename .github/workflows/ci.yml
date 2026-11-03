@@ -69,7 +69,7 @@ jobs:
           $lines = Get-Content $src
           $entries = @()
           for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match '^\s*panicked at') {
+            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match ':\d+:\d+: error' -or $lines[$i] -match 'could not compile' -or $lines[$i] -match '^\s*panicked at') {
               $where = ''
               for ($j = $i + 1; $j -lt [Math]::Min($i + 4, $lines.Count); $j++) {
                 if ($lines[$j] -match '^\s*-->') { $where = $lines[$j].Trim(); break }
@@ -90,7 +90,7 @@ jobs:
           $lines = Get-Content $src
           $entries = @()
           for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match '^\s*panicked at') {
+            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match ':\d+:\d+: error' -or $lines[$i] -match 'could not compile' -or $lines[$i] -match '^\s*panicked at') {
               $where = ''
               for ($j = $i + 1; $j -lt [Math]::Min($i + 4, $lines.Count); $j++) {
                 if ($lines[$j] -match '^\s*-->') { $where = $lines[$j].Trim(); break }
