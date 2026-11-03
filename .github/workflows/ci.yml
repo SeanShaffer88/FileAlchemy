@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-and-test:
+    name: Build, lint and test (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (MSVC toolchain)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Non-blocking: the checked-in sources were authored without a local
+      # toolchain, so formatting is normalised here and reported, not enforced.
+      - name: rustfmt (informational)
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -A clippy::too_many_arguments -A clippy::needless_return
+
+      - name: Unit tests (formats, config, mime, parsers, placement, PDF writer)
+        run: cargo test --all-targets
+
+      - name: Release build (static CRT)
+        run: cargo build --release
+
+      - name: Verify static CRT + embedded manifest
+        shell: pwsh
+        run: |
+          $exe = "target/release/FileAlchemy.exe"
+          $ascii = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe))
+          foreach ($needle in @("VCRUNTIME140.dll", "MSVCP140.dll")) {
+            if ($ascii.Contains($needle)) {
+              throw "Static CRT check failed: $exe imports $needle"
+            }
+          }
+          $utf16 = [System.Text.Encoding]::Unicode.GetString([System.IO.File]::ReadAllBytes($exe))
+          if (-not $utf16.Contains("PerMonitorV2")) {
+            throw "Per-Monitor V2 DPI manifest is not embedded"
+          }
+          Write-Host "Static CRT and DPI manifest verified."
+
+      - name: CLI smoke test (version, help, Explorer integration)
+        shell: pwsh
+        run: |
+          $exe = "target/release/FileAlchemy.exe"
+
+          & $exe --version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "--version failed" }
+          & $exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "--help failed" }
+
+          & $exe --install-shell-menu
+          if ($LASTEXITCODE -ne 0) { throw "--install-shell-menu failed" }
+          $key = "Registry::HKEY_CURRENT_USER\Software\Classes\*\shell\FileAlchemy"
+          if (-not (Test-Path -LiteralPath $key)) { throw "Context menu key was not created" }
+          $command = (Get-ItemProperty -LiteralPath "$key\command").'(default)'
+          if ($command -notmatch 'FileAlchemy\.exe" "%1') { throw "Unexpected command: $command" }
+
+          & $exe --uninstall-shell-menu
+          if ($LASTEXITCODE -ne 0) { throw "--uninstall-shell-menu failed" }
+          if (Test-Path -LiteralPath $key) { throw "Context menu key was not removed" }
+
+      # A GUI smoke test: the window must appear and stay alive, then close
+      # cleanly when the process is stopped.
+      - name: GUI launches without crashing
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "target/release/FileAlchemy.exe" -PassThru
+          Start-Sleep -Seconds 6
+          if ($proc.HasExited) { throw "FileAlchemy exited immediately (code $($proc.ExitCode))" }
+          $proc.CloseMainWindow() | Out-Null
+          Start-Sleep -Seconds 2
+          if (-not $proc.HasExited) { $proc.Kill() }
+          $dataDir = Join-Path $env:LOCALAPPDATA "FileAlchemy"
+          if (-not (Test-Path (Join-Path $dataDir "config.json"))) {
+            throw "config.json was not created in $dataDir"
+          }
+          Get-Content (Join-Path $dataDir "config.json")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FileAlchemy-ci-binary
+          path: target/release/FileAlchemy.exe
+          if-no-files-found: error
