@@ -131,8 +131,7 @@ component Chip inherits Rectangle {
         alignment: center;
         padding-left: 8px;
         padding-right: 8px;
-        Text {
-            id: lbl;
+        lbl := Text {
             color: root.selected ? #ffffff : Theme.text-dim;
             font-size: 11px;
             vertical-alignment: center;
@@ -149,9 +148,8 @@ component Chip inherits Rectangle {
     }
 
     fs := FocusScope {
-        focusable: true;
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+            if (event.text == " " || event.text == "\n") {
                 root.clicked();
                 return accept;
             }
@@ -192,9 +190,8 @@ component IconButton inherits Rectangle {
     }
 
     fs := FocusScope {
-        focusable: true;
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+            if (event.text == " " || event.text == "\n") {
                 root.clicked();
                 return accept;
             }
@@ -229,8 +226,7 @@ component TextButton inherits Rectangle {
         alignment: center;
         padding-left: 14px;
         padding-right: 14px;
-        Text {
-            id: lbl;
+        lbl := Text {
             color: root.primary ? #0b1220 : (root.danger ? Theme.bad : Theme.text);
             font-size: 12px;
             font-weight: 600;
@@ -248,9 +244,8 @@ component TextButton inherits Rectangle {
     }
 
     fs := FocusScope {
-        focusable: true;
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+            if (event.text == " " || event.text == "\n") {
                 root.clicked();
                 return accept;
             }
@@ -295,8 +290,7 @@ component Toggle inherits Rectangle {
                 }
             }
         }
-        Text {
-            id: lbl;
+        lbl := Text {
             color: Theme.text;
             font-size: 12px;
             vertical-alignment: center;
@@ -314,9 +308,8 @@ component Toggle inherits Rectangle {
     }
 
     fs := FocusScope {
-        focusable: true;
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+            if (event.text == " " || event.text == "\n") {
                 root.checked = !root.checked;
                 root.toggled(root.checked);
                 return accept;
@@ -330,7 +323,7 @@ component ProgressBar inherits Rectangle {
     in property <float> value: 0.0;
     in property <bool> indeterminate: false;
     in property <string> status: "queued";
-    in property <float> phase: 0.0;
+    in-out property <float> phase: 0.0;
 
     min-height: 6px;
     max-height: 6px;
@@ -386,7 +379,7 @@ component HelpDot inherits Rectangle {
     }
 
     TouchArea {
-        mouse-cursor: help;
+        mouse-cursor: pointer;
         moved => { Hint.text = root.help; }
     }
 }
@@ -1056,7 +1049,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         TouchArea {
-                            mouse-cursor: help;
+                            mouse-cursor: pointer;
                             moved => {
                                 Hint.text = "Air-gapped by design: FileAlchemy makes no network requests, has no telemetry, and never checks for updates.";
                             }
