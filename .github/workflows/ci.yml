@@ -9,6 +9,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Windows runners intermittently fail crate downloads with "[16] Error in the
+  # HTTP2 framing layer"; it is a multiplexing bug, not a network outage. These
+  # three settings turn that into a retry instead of a red build.
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_HTTP_TIMEOUT: "60"
+  CARGO_NET_RETRY: "10"
 
 jobs:
   build-and-test:
