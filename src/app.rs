@@ -17,7 +17,9 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::config::Config;
-use crate::engine::formats::{self, CollisionPolicy, Format, OutputStrategy, Preset, Profile, Resolution};
+use crate::engine::formats::{
+    self, CollisionPolicy, Format, OutputStrategy, Preset, Profile, Resolution,
+};
 use crate::engine::mime;
 use crate::engine::pipeline::{Engine, EngineEvent};
 use crate::engine::{human_size, TaskRequest};
@@ -102,8 +104,7 @@ impl ItemState {
     }
 }
 
-/// Everything the callbacks need, cloneable and free of `&mut self` problems.
-#[derive(Clone)]
+/// Everything the callbacks need, shared and free of `&mut self` problems.
 struct Ctx {
     ui: AppWindow,
     engine: Rc<Engine>,
@@ -408,7 +409,8 @@ impl Ctx {
         let ui = &self.ui;
         {
             let mut config = self.config.borrow_mut();
-            config.max_concurrent_tasks = Config::concurrency_from_index(ui.get_concurrency_index() as usize);
+            config.max_concurrent_tasks =
+                Config::concurrency_from_index(ui.get_concurrency_index() as usize);
             config.notifications.play_sound_on_complete = ui.get_play_sound();
             config.notifications.flash_taskbar_on_complete = ui.get_flash_taskbar();
             config.cleanup.purge_temp_on_cancel = ui.get_purge_temp();
@@ -704,11 +706,19 @@ fn describe_outputs(outputs: &[PathBuf]) -> String {
             "Saved {n} files · {} … {}",
             outputs
                 .first()
-                .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+                .map(|p| p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned())
                 .unwrap_or_default(),
             outputs
                 .last()
-                .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+                .map(|p| p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned())
                 .unwrap_or_default()
         ),
     }
@@ -756,7 +766,7 @@ fn expand_paths(inputs: &[PathBuf]) -> Vec<PathBuf> {
 
 /// Owns the window, the timer and the shared context.
 pub struct App {
-    ctx: Ctx,
+    ctx: Rc<Ctx>,
     _timer: Timer,
 }
 
@@ -795,8 +805,8 @@ impl App {
         ui.set_custom_output(config.output_strategy == OutputStrategy::CustomDir);
         ui.set_custom_output_path(SharedString::from(config.custom_output_dir.clone()));
 
-        let ctx = Ctx {
-            ui: ui.clone(),
+        let ctx = Rc::new(Ctx {
+            ui,
             engine: Rc::new(engine),
             paths: Rc::new(paths),
             config: Rc::new(RefCell::new(config)),
@@ -807,13 +817,17 @@ impl App {
             next_id: Rc::new(Cell::new(1)),
             hwnd: Rc::new(Cell::new(0)),
             was_running: Rc::new(Cell::new(false)),
-        };
+        });
 
         wire_callbacks(&ctx);
 
         let timer = Timer::default();
-        let tick_ctx = ctx.clone();
-        timer.start(TimerMode::Repeated, TICK, move || tick_ctx.tick());
+        let tick_ctx = Rc::downgrade(&ctx);
+        timer.start(TimerMode::Repeated, TICK, move || {
+            if let Some(ctx) = tick_ctx.upgrade() {
+                ctx.tick();
+            }
+        });
 
         Ok(App { ctx, _timer: timer })
     }
@@ -874,7 +888,9 @@ fn fill_options(ui: &AppWindow) {
             .map(|p| SharedString::from(p.label())),
     ));
     options.set_preset_helps(strings(
-        formats::PRESETS.iter().map(|p| SharedString::from(p.help())),
+        formats::PRESETS
+            .iter()
+            .map(|p| SharedString::from(p.help())),
     ));
     options.set_resolutions(strings(
         formats::RESOLUTIONS
@@ -888,64 +904,120 @@ fn fill_options(ui: &AppWindow) {
     ));
 }
 
-fn wire_callbacks(ctx: &Ctx) {
-    let ui = ctx.ui.clone();
+fn wire_callbacks(ctx: &Rc<Ctx>) {
+    let ui = &ctx.ui;
 
     {
-        let ctx = ctx.clone();
-        ui.on_browse_files(move || ctx.browse());
+        let ctx = Rc::downgrade(ctx);
+        ui.on_browse_files(move || {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.browse();
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_choose_output_dir(move || ctx.choose_output_dir());
+        let ctx = Rc::downgrade(ctx);
+        ui.on_choose_output_dir(move || {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.choose_output_dir();
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_convert_all(move || ctx.convert_all());
+        let ctx = Rc::downgrade(ctx);
+        ui.on_convert_all(move || {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.convert_all();
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_cancel_all(move || ctx.cancel_all());
+        let ctx = Rc::downgrade(ctx);
+        ui.on_cancel_all(move || {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.cancel_all();
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_clear_queue(move || ctx.clear());
+        let ctx = Rc::downgrade(ctx);
+        ui.on_clear_queue(move || {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.clear();
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_remove_item(move |id| ctx.remove(id as i64));
+        let ctx = Rc::downgrade(ctx);
+        ui.on_remove_item(move |id| {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.remove(id as i64);
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_select_item(move |id| ctx.select(id as i64));
+        let ctx = Rc::downgrade(ctx);
+        ui.on_select_item(move |id| {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.select(id as i64);
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_set_face(move |id, face| ctx.set_face(id as i64, face.as_str()));
+        let ctx = Rc::downgrade(ctx);
+        ui.on_set_face(move |id, face| {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.set_face(id as i64, face.as_str());
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_set_target(move |id, index| ctx.set_target(id as i64, index as usize));
+        let ctx = Rc::downgrade(ctx);
+        ui.on_set_target(move |id, index| {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.set_target(id as i64, index as usize);
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_set_preset(move |id, index| ctx.set_preset(id as i64, index as usize));
+        let ctx = Rc::downgrade(ctx);
+        ui.on_set_preset(move |id, index| {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.set_preset(id as i64, index as usize);
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_set_resolution(move |id, index| ctx.set_resolution(id as i64, index as usize));
+        let ctx = Rc::downgrade(ctx);
+        ui.on_set_resolution(move |id, index| {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.set_resolution(id as i64, index as usize);
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_set_collision(move |index| ctx.set_collision(index as usize));
+        let ctx = Rc::downgrade(ctx);
+        ui.on_set_collision(move |index| {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.set_collision(index as usize);
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_set_custom_output(move |custom| ctx.set_custom_output(custom));
+        let ctx = Rc::downgrade(ctx);
+        ui.on_set_custom_output(move |custom| {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.set_custom_output(custom);
+            }
+        });
     }
     {
-        let ctx = ctx.clone();
-        ui.on_save_settings(move || ctx.save_settings());
+        let ctx = Rc::downgrade(ctx);
+        ui.on_save_settings(move || {
+            if let Some(ctx) = ctx.upgrade() {
+                ctx.save_settings();
+            }
+        });
     }
 }
 

@@ -315,6 +315,7 @@ mod tests {
     }
 
     fn request(id: u64, source: PathBuf) -> TaskRequest {
+        let output_dir = source.parent().unwrap().to_path_buf();
         TaskRequest {
             id,
             source,
@@ -327,7 +328,7 @@ mod tests {
             target: Format::Markdown,
             preset: Preset::Balanced,
             resolution: Resolution::Original,
-            output_dir: source.parent().unwrap().to_path_buf(),
+            output_dir,
             collision: CollisionPolicy::AutoRename,
             purge_on_cancel: true,
         }

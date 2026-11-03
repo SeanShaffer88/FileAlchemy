@@ -20,15 +20,16 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
+use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL};
 use windows_sys::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, DefWindowProcW, EnumWindows, FindWindowW, FlashWindowEx,
-    GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible, MessageBeep, SendMessageW,
-    SetForegroundWindow, SetWindowLongPtrW, ShowWindow, COPYDATASTRUCT, FLASHWINFO, FLASHW_ALL,
-    FLASHW_TIMERNOFG, GWLP_WNDPROC, MB_ICONASTERISK, SW_RESTORE, WM_COPYDATA, WM_DROPFILES,
-    WM_KEYDOWN, WM_SYSKEYDOWN, WNDPROC,
+    CallWindowProcW, DefWindowProcW, EnumWindows, FindWindowW, FlashWindowEx, GetWindowTextLengthW,
+    GetWindowThreadProcessId, IsWindowVisible, SendMessageW, SetForegroundWindow,
+    SetWindowLongPtrW, ShowWindow, FLASHWINFO, FLASHW_ALL, FLASHW_TIMERNOFG, GWLP_WNDPROC,
+    MB_ICONASTERISK, SW_RESTORE, WM_COPYDATA, WM_DROPFILES, WM_KEYDOWN, WM_SYSKEYDOWN, WNDPROC,
 };
 
 use crate::platform::{from_wide, wide_str, COPYDATA_MAGIC};
@@ -82,8 +83,8 @@ pub mod jobobject {
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject, TerminateJobObject,
-        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
@@ -166,7 +167,7 @@ pub mod jobobject {
 // =============================================================================
 
 pub mod single_instance {
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
     use windows_sys::Win32::System::Threading::CreateMutexW;
 
     use crate::platform::{wide_str, MUTEX_NAME};
@@ -277,9 +278,7 @@ pub fn find_own_window(timeout_ms: u64) -> Option<isize> {
 unsafe extern "system" fn enum_own_window(hwnd: HWND, _lparam: LPARAM) -> BOOL {
     let mut pid: u32 = 0;
     GetWindowThreadProcessId(hwnd, &mut pid);
-    if pid == GetCurrentProcessId()
-        && IsWindowVisible(hwnd) != 0
-        && GetWindowTextLengthW(hwnd) > 0
+    if pid == GetCurrentProcessId() && IsWindowVisible(hwnd) != 0 && GetWindowTextLengthW(hwnd) > 0
     {
         ENUM_RESULT.store(hwnd as isize, Ordering::SeqCst);
         return 0; // stop enumerating
@@ -422,7 +421,7 @@ fn handle_hotkey(vk: u32) -> bool {
     let command = match (vk, ctrl) {
         (VK_ESCAPE, false) => Command::CancelAll,
         (VK_RETURN, false) => Command::ConvertAll,
-        (0x4F, true) => Command::Browse,        // Ctrl+O
+        (0x4F, true) => Command::Browse,               // Ctrl+O
         (VK_OEM_COMMA, true) => Command::OpenSettings, // Ctrl+,
         _ => return false,
     };
@@ -537,14 +536,15 @@ pub fn flash_taskbar(hwnd: isize) {
 pub mod dialogs {
     use std::path::PathBuf;
 
+    use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::Controls::Dialogs::{
-        GetOpenFileNameW, OPENFILENAMEW, OFN_ALLOWMULTISELECT, OFN_EXPLORER, OFN_FILEMUSTEXIST,
-        OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST,
+        GetOpenFileNameW, OFN_ALLOWMULTISELECT, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY,
+        OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
     };
     use windows_sys::Win32::UI::Shell::{
-        SHBrowseForFolderW, SHGetPathFromIDListW, BROWSEINFOW, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS,
+        SHBrowseForFolderW, SHGetPathFromIDListW, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS,
+        BROWSEINFOW,
     };
-    use windows_sys::Win32::Foundation::HWND;
 
     use crate::platform::{from_wide, wide_str};
 
@@ -561,7 +561,9 @@ pub mod dialogs {
         filter.push('\0');
         filter.push_str("Images");
         filter.push('\0');
-        filter.push_str("*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff;*.gif;*.ico;*.svg;*.avif;*.qoi");
+        filter.push_str(
+            "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.tif;*.tiff;*.gif;*.ico;*.svg;*.avif;*.qoi",
+        );
         filter.push('\0');
         filter.push_str("Audio & video");
         filter.push('\0');
@@ -642,11 +644,13 @@ pub mod dialogs {
 
     /// Browse-for-folder dialog (`SHBrowseForFolderW`).
     pub fn pick_folder(owner: isize) -> Option<PathBuf> {
-        use windows_sys::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED};
+        use windows_sys::Win32::System::Com::{
+            CoInitializeEx, CoTaskMemFree, COINIT_APARTMENTTHREADED,
+        };
 
         unsafe {
             // S_FALSE (already initialised) is fine; S_OK is fine.
-            CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED);
+            CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
         }
 
         let title = wide_str("Choose where converted files are saved");

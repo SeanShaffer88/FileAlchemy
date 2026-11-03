@@ -111,9 +111,9 @@ fn run() -> Result<ExitCode, String> {
     let instance = platform::single_instance::acquire();
     if let Some(instance) = instance.as_ref() {
         if instance.already_running() {
-            if let Some(hwnd) = platform::window::find_existing_window() {
-                let forwarded = platform::window::send_paths(hwnd, &files);
-                platform::window::bring_to_front(hwnd);
+            if let Some(hwnd) = platform::find_existing_window() {
+                let forwarded = platform::send_paths(hwnd, &files);
+                platform::bring_to_front(hwnd);
                 if !forwarded {
                     platform::console::note(
                         "FileAlchemy is already running but did not accept the files.",
@@ -164,7 +164,7 @@ fn run() -> Result<ExitCode, String> {
         let commands = commands.clone();
         std::thread::Builder::new()
             .name("filealchemy-hooks".into())
-            .spawn(move || match platform::window::install(commands.clone()) {
+            .spawn(move || match platform::install(commands.clone()) {
                 Some(hwnd) => platform::push(&commands, platform::Command::WindowReady(hwnd)),
                 None => platform::console::note(
                     "Could not attach the native window hooks; drag & drop and global \
@@ -203,7 +203,9 @@ fn handle_shell_menu(paths: &paths::Paths, install: bool) -> ExitCode {
     match &outcome {
         shell::ShellMenuChange::Installed => {
             config.shell_integration.enabled = true;
-            platform::console::note("Added \"Convert with FileAlchemy\" to the Explorer context menu.");
+            platform::console::note(
+                "Added \"Convert with FileAlchemy\" to the Explorer context menu.",
+            );
         }
         shell::ShellMenuChange::Removed => {
             config.shell_integration.enabled = false;

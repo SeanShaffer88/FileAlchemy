@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use crate::engine::external::{self, CommandSpec, Tool};
 use crate::engine::formats::Format;
 use crate::engine::mime::InputKind;
-use crate::engine::{is_cancelled, CancelToken, EngineContext, EngineError, ProgressFn, Result, TaskRequest};
+use crate::engine::{
+    is_cancelled, CancelToken, EngineContext, EngineError, ProgressFn, Result, TaskRequest,
+};
 
 /// Refuse to build a Markdown/HTML blob out of a 200 MB CSV.
 const MAX_TEXT_INPUT: u64 = 64 * 1024 * 1024;
@@ -301,7 +303,9 @@ fn rich_text_to_text(
             "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>{}</title></head>\
              <body><p>{}</p></body></html>\n",
             html_escape(&req.stem()),
-            html_escape(&plain).replace("\n\n", "</p><p>").replace('\n', "<br>")
+            html_escape(&plain)
+                .replace("\n\n", "</p><p>")
+                .replace('\n', "<br>")
         ),
         _ => plain,
     };
@@ -421,15 +425,17 @@ pub fn parse_delimited(text: &str, delimiter: char) -> Vec<Vec<String>> {
 
 fn render_table(rows: &[Vec<String>], target: Format) -> String {
     let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
-    let cell = |row: &Vec<String>, i: usize| -> &str {
+    fn cell(row: &[String], i: usize) -> &str {
         row.get(i).map(String::as_str).unwrap_or("")
-    };
+    }
 
     match target {
         Format::Html => {
-            let mut out = String::from("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\
+            let mut out = String::from(
+                "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\
                 <style>table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}\
-                th{background:#f0f0f0}</style></head><body><table>\n");
+                th{background:#f0f0f0}</style></head><body><table>\n",
+            );
             for (index, row) in rows.iter().enumerate() {
                 out.push_str("<tr>");
                 let tag = if index == 0 { "th" } else { "td" };
@@ -609,11 +615,8 @@ pub fn rtf_to_text(src: &str) -> String {
                                 i += 1;
                             }
                         }
-                        let number: Option<i64> = chars[num_start..i]
-                            .iter()
-                            .collect::<String>()
-                            .parse()
-                            .ok();
+                        let number: Option<i64> =
+                            chars[num_start..i].iter().collect::<String>().parse().ok();
                         if i < chars.len() && chars[i] == ' ' {
                             i += 1;
                         }
@@ -642,9 +645,8 @@ pub fn rtf_to_text(src: &str) -> String {
                                         pending_high_surrogate = Some(code);
                                     } else if (0xDC00..0xE000).contains(&code) {
                                         if let Some(high) = pending_high_surrogate.take() {
-                                            let cp = 0x10000
-                                                + ((high - 0xD800) << 10)
-                                                + (code - 0xDC00);
+                                            let cp =
+                                                0x10000 + ((high - 0xD800) << 10) + (code - 0xDC00);
                                             if let Some(ch) = char::from_u32(cp) {
                                                 push_char(&mut out, ch);
                                             }
@@ -784,7 +786,13 @@ mod tests {
         ] {
             assert!(reader_for(kind).is_some(), "{kind:?} has no reader");
         }
-        for target in [Format::Docx, Format::Markdown, Format::Html, Format::Txt, Format::Epub] {
+        for target in [
+            Format::Docx,
+            Format::Markdown,
+            Format::Html,
+            Format::Txt,
+            Format::Epub,
+        ] {
             assert!(writer_for(target).is_some(), "{target:?} has no writer");
         }
     }
