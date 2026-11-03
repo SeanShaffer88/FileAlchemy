@@ -1115,15 +1115,18 @@ export component AppWindow inherits Window {
                         font-size: 11px;
                         vertical-alignment: center;
                     }
-                    if (root.items.length > 0 && !root.running) : Rectangle {
-                        min-width: clear-lbl.preferred-width + 12px;
-                        max-width: clear-lbl.preferred-width + 12px;
+                    // `visible`, not `if`: an id declared inside a conditional
+                    // body cannot be referenced by that body's own properties,
+                    // and both the width and the hover state need those ids.
+                    Rectangle {
+                        visible: root.items.length > 0 && !root.running;
+                        min-width: 64px;
+                        max-width: 64px;
                         min-height: 18px;
                         max-height: 18px;
                         border-radius: 4px;
                         background: clear-ta.has-hover ? Theme.surface-3 : transparent;
                         Text {
-                            id: clear-lbl;
                             text: "Clear all";
                             color: Theme.text-faint;
                             font-size: 10px;
