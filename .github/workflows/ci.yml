@@ -37,58 +37,79 @@ jobs:
         continue-on-error: true
         run: cargo fmt --all -- --check
 
-      # Compiler diagnostics are re-emitted as check-run annotations. That is
-      # the only channel that survives when the raw log URL is unreachable
-      # (it is signed blob storage, often blocked by egress policy), so a
-      # failing build stays diagnosable without the full log.
+      # Each cargo step writes its full log to a file; the diagnostics steps
+      # below turn it into check-run annotations. Annotations are the only
+      # readable channel when the raw job log (signed blob storage) is blocked.
       - name: Clippy
         shell: pwsh
         run: |
           cargo clippy --all-targets --message-format=short -- -A clippy::too_many_arguments -A clippy::needless_return *> clippy.txt
-          $code = $LASTEXITCODE
-          if ($code -ne 0) {
-            $all = Get-Content clippy.txt
-            # 1) real diagnostics (rustc "error[E0310]: ..." and "src/x.rs:12:3: error:")
-            $diag = $all | Where-Object {
-              $_ -match '^error(\[E\d+\])?:' -or
-              $_ -match ':\d+:\d+: error' -or
-              $_ -match 'error: could not compile'
-            }
-            foreach ($e in ($diag | Select-Object -First 100)) { Write-Host "::error title=rustc::$($e.Trim())" }
-            # 2) the tail, so a failure with no parsed diagnostic is still visible
-            $i = 0
-            foreach ($t in ($all | Select-Object -Last 45)) {
-              $i++
-              Write-Host "::error title=tail-$i::$($t.Trim())"
-            }
-            Write-Host "::error title=clippy::cargo clippy exited with code $code"
-            exit 1
-          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Unit tests (formats, config, mime, parsers, placement, PDF writer)
         shell: pwsh
         run: |
           cargo test --all-targets --message-format=short *> test.txt
-          $code = $LASTEXITCODE
-          if ($code -ne 0) {
-            Get-Content test.txt | Select-Object -Last 60 | ForEach-Object { Write-Host $_ }
-            $errors = Get-Content test.txt | Where-Object { $_ -match ':\d+:\d+: error|panicked at|FAILED' } | Select-Object -First 100
-            foreach ($e in $errors) { Write-Host "::error title=test::$($e.Trim())" }
-            Write-Host "::error title=tests::cargo test exited with code $code"
-            exit 1
-          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Release build (static CRT)
         shell: pwsh
         run: |
           cargo build --release --message-format=short *> build.txt
-          $code = $LASTEXITCODE
-          if ($code -ne 0) {
-            Get-Content build.txt | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
-            $errors = Get-Content build.txt | Where-Object { $_ -match error } | Select-Object -First 100
-            foreach ($e in $errors) { Write-Host "::error title=build::$($e.Trim())" }
-            Write-Host "::error title=build::cargo build exited with code $code"
-            exit 1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      # GitHub caps annotations per step (~10), so the first errors get their
+      # own step: they are the root causes, and the tail is often just fallout.
+      - name: Annotate diagnostics 1/3 (first errors)
+        if: failure()
+        shell: pwsh
+        run: |
+          $src = @('clippy.txt','test.txt','build.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $src) { Write-Host '::error title=ci::no cargo log was produced'; exit 0 }
+          $lines = Get-Content $src
+          $entries = @()
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match ':\d+:\d+: error' -or $lines[$i] -match 'could not compile' -or $lines[$i] -match '^\s*panicked at') {
+              $where = ''
+              for ($j = $i + 1; $j -lt [Math]::Min($i + 4, $lines.Count); $j++) {
+                if ($lines[$j] -match '^\s*-->') { $where = $lines[$j].Trim(); break }
+              }
+              $entries += (($lines[$i].Trim() + '  ' + $where).Trim())
+            }
+          }
+          if ($entries.Count -eq 0) { $entries = $lines | Select-Object -Last 10 }
+          $n = [Math]::Min(10, $entries.Count)
+          for ($k = 0; $k -lt $n; $k++) { Write-Host "::error title=$src\[$k\]::$($entries[$k])" }
+
+      - name: Annotate diagnostics 2/3 (next errors)
+        if: failure()
+        shell: pwsh
+        run: |
+          $src = @('clippy.txt','test.txt','build.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $src) { exit 0 }
+          $lines = Get-Content $src
+          $entries = @()
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match ':\d+:\d+: error' -or $lines[$i] -match 'could not compile' -or $lines[$i] -match '^\s*panicked at') {
+              $where = ''
+              for ($j = $i + 1; $j -lt [Math]::Min($i + 4, $lines.Count); $j++) {
+                if ($lines[$j] -match '^\s*-->') { $where = $lines[$j].Trim(); break }
+              }
+              $entries += (($lines[$i].Trim() + '  ' + $where).Trim())
+            }
+          }
+          for ($k = 10; $k -lt [Math]::Min(20, $entries.Count); $k++) { Write-Host "::error title=$src\[$k\]::$($entries[$k])" }
+
+      - name: Annotate diagnostics 3/3 (tail)
+        if: failure()
+        shell: pwsh
+        run: |
+          $src = @('clippy.txt','test.txt','build.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $src) { exit 0 }
+          $i = 0
+          Get-Content $src | Select-Object -Last 15 | ForEach-Object {
+            $i++
+            Write-Host "::error title=tail-$i::$($_.Trim())"
           }
 
       - name: Verify static CRT + embedded manifest

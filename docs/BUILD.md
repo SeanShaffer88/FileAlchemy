@@ -120,6 +120,23 @@ Honest accounting, because a plan is not a build:
   and WiX. The source snapshot was produced in an environment without a Rust
   toolchain and without access to crates.io, so no compilation has been claimed
   or implied.
+* **What CI has actually proven so far:** dependency resolution and
+  compilation up to this crate, and one real diagnostic
+  (`Cannot access id 'clear-lbl'`), which is fixed. The steps after the Slint
+  compile — unit tests, the release build, the static-CRT scan, the CLI smoke
+  test and the GUI launch — have never run yet, because the job stops at the
+  first failing step.
+* **If a CI job fails and the log URL is unreachable** (it is signed blob
+  storage, and an egress policy can block it): every compile and test failure
+  is re-emitted as a check-run annotation, which is readable from anywhere with
+  `gh api repos/OWNER/REPO/check-runs/JOB_ID/annotations`. That mechanism is
+  deliberate.
+* **Slint id-scope rule learned from CI:** an id declared inside an `if` or
+  `for` body cannot be referenced from that body's *own* properties; reference
+  it only from descendants. Slint's
+  `internal/compiler/tests/syntax/lookup/for_lookup.slint` documents the same
+  boundary. Sibling forward references are fine — Slint's own fluent `Button`
+  binds `min-width` against a layout declared further down.
 * **Cross-checked against upstream sources** (not compiled, but read off the
   actual tagged sources rather than memory): `windows-sys` 0.59 feature names
   (all 15 exist), Slint 1.8 cargo features (`backend-winit`,

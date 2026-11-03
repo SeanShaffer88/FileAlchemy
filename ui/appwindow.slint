@@ -131,8 +131,7 @@ component Chip inherits Rectangle {
         alignment: center;
         padding-left: 8px;
         padding-right: 8px;
-        Text {
-            id: lbl;
+        lbl := Text {
             color: root.selected ? #ffffff : Theme.text-dim;
             font-size: 11px;
             vertical-alignment: center;
@@ -149,9 +148,8 @@ component Chip inherits Rectangle {
     }
 
     fs := FocusScope {
-        focusable: true;
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+            if (event.text == " " || event.text == "\n") {
                 root.clicked();
                 return accept;
             }
@@ -192,9 +190,8 @@ component IconButton inherits Rectangle {
     }
 
     fs := FocusScope {
-        focusable: true;
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+            if (event.text == " " || event.text == "\n") {
                 root.clicked();
                 return accept;
             }
@@ -229,8 +226,7 @@ component TextButton inherits Rectangle {
         alignment: center;
         padding-left: 14px;
         padding-right: 14px;
-        Text {
-            id: lbl;
+        lbl := Text {
             color: root.primary ? #0b1220 : (root.danger ? Theme.bad : Theme.text);
             font-size: 12px;
             font-weight: 600;
@@ -248,9 +244,8 @@ component TextButton inherits Rectangle {
     }
 
     fs := FocusScope {
-        focusable: true;
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+            if (event.text == " " || event.text == "\n") {
                 root.clicked();
                 return accept;
             }
@@ -295,8 +290,7 @@ component Toggle inherits Rectangle {
                 }
             }
         }
-        Text {
-            id: lbl;
+        lbl := Text {
             color: Theme.text;
             font-size: 12px;
             vertical-alignment: center;
@@ -314,9 +308,8 @@ component Toggle inherits Rectangle {
     }
 
     fs := FocusScope {
-        focusable: true;
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n" || event.text == "\r") {
+            if (event.text == " " || event.text == "\n") {
                 root.checked = !root.checked;
                 root.toggled(root.checked);
                 return accept;
@@ -330,7 +323,7 @@ component ProgressBar inherits Rectangle {
     in property <float> value: 0.0;
     in property <bool> indeterminate: false;
     in property <string> status: "queued";
-    in property <float> phase: 0.0;
+    in-out property <float> phase: 0.0;
 
     min-height: 6px;
     max-height: 6px;
@@ -386,7 +379,7 @@ component HelpDot inherits Rectangle {
     }
 
     TouchArea {
-        mouse-cursor: help;
+        mouse-cursor: pointer;
         moved => { Hint.text = root.help; }
     }
 }
@@ -475,14 +468,13 @@ component QueueCard inherits Rectangle {
                         horizontal-stretch: 1;
                     }
                     Rectangle {
-                        min-width: cat-lbl.preferred-width + 12px;
-                        max-width: cat-lbl.preferred-width + 12px;
+                        min-width: 64px;
+                        max-width: 64px;
                         min-height: 16px;
                         max-height: 16px;
                         border-radius: 4px;
                         background: Theme.surface-3;
                         Text {
-                            id: cat-lbl;
                             text: root.data.category-label;
                             color: Theme.text-dim;
                             font-size: 9px;
@@ -507,8 +499,10 @@ component QueueCard inherits Rectangle {
                 max-height: 24px;
                 border-radius: 6px;
                 border-width: 1px;
-                border-color: fmt-ta.has-hover ? Theme.accent : Theme.border;
-                background: fmt-ta.has-hover ? Theme.surface-3 : Theme.surface-2;
+                // No hover tint here: this rectangle is nested, and a nested
+                // element may not reference an id declared deeper (fmt-ta).
+                border-color: Theme.border;
+                background: Theme.surface-2;
                 accessible-role: button;
                 accessible-label: "Target format: " + root.data.target;
                 accessible-description: "Choose what this file will be converted to.";
@@ -554,8 +548,8 @@ component QueueCard inherits Rectangle {
                 max-height: 24px;
                 border-radius: 6px;
                 border-width: 1px;
-                border-color: tune-ta.has-hover ? Theme.accent : Theme.border;
-                background: (root.data.face == "tune" || tune-ta.has-hover) ? Theme.surface-3 : Theme.surface-2;
+                border-color: root.data.face == "tune" ? Theme.accent : Theme.border;
+                background: root.data.face == "tune" ? Theme.surface-3 : Theme.surface-2;
                 accessible-role: button;
                 accessible-label: "Tune quality and size";
                 accessible-description: "Quality preset and output resolution for this file.";
@@ -756,7 +750,7 @@ component DropZone inherits Rectangle {
                 border-radius: 6px;
                 border-width: 1px;
                 border-color: Theme.border;
-                background: browse-ta.has-hover ? Theme.surface-3 : Theme.surface-2;
+                background: Theme.surface-2;
                 Text {
                     text: root.queue-len == 0 ? "Browse Files…" : "Add Files…";
                     color: Theme.text;
@@ -1019,8 +1013,11 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     alignment: center;
                     Rectangle {
-                        min-width: offline-lbl.preferred-width + 24px;
-                        max-width: offline-lbl.preferred-width + 24px;
+                        // Fixed width: a nested element cannot reference an id
+                        // declared deeper in the tree (only a component root
+                        // can), so the badge does not measure its own label.
+                        min-width: 104px;
+                        max-width: 104px;
                         min-height: 22px;
                         max-height: 22px;
                         border-radius: 11px;
@@ -1045,7 +1042,6 @@ export component AppWindow inherits Window {
                                 }
                             }
                             Text {
-                                id: offline-lbl;
                                 text: "100% offline";
                                 color: Theme.ok;
                                 font-size: 10px;
@@ -1053,7 +1049,7 @@ export component AppWindow inherits Window {
                             }
                         }
                         TouchArea {
-                            mouse-cursor: help;
+                            mouse-cursor: pointer;
                             moved => {
                                 Hint.text = "Air-gapped by design: FileAlchemy makes no network requests, has no telemetry, and never checks for updates.";
                             }
@@ -1125,7 +1121,7 @@ export component AppWindow inherits Window {
                         min-height: 18px;
                         max-height: 18px;
                         border-radius: 4px;
-                        background: clear-ta.has-hover ? Theme.surface-3 : transparent;
+                        background: transparent;
                         Text {
                             text: "Clear all";
                             color: Theme.text-faint;
@@ -1225,14 +1221,14 @@ export component AppWindow inherits Window {
                     }
 
                     Rectangle {
-                        min-width: same-lbl.preferred-width + 30px;
-                        max-width: same-lbl.preferred-width + 30px;
+                        min-width: 150px;
+                        max-width: 150px;
                         min-height: 24px;
                         max-height: 24px;
                         border-radius: 6px;
                         border-width: 1px;
                         border-color: !root.custom-output ? Theme.accent : Theme.border;
-                        background: !root.custom-output ? Theme.accent-dim : (same-ta.has-hover ? Theme.surface-3 : Theme.surface-2);
+                        background: !root.custom-output ? Theme.accent-dim : Theme.surface-2;
                         accessible-role: button;
                         accessible-label: "Same folder as the source file";
 
@@ -1246,7 +1242,6 @@ export component AppWindow inherits Window {
                                 vertical-alignment: center;
                             }
                             Text {
-                                id: same-lbl;
                                 text: "Same folder as source";
                                 color: !root.custom-output ? #ffffff : Theme.text-dim;
                                 font-size: 11px;
@@ -1266,7 +1261,7 @@ export component AppWindow inherits Window {
                         border-radius: 6px;
                         border-width: 1px;
                         border-color: root.custom-output ? Theme.accent : Theme.border;
-                        background: root.custom-output ? Theme.accent-dim : (cust-ta.has-hover ? Theme.surface-3 : Theme.surface-2);
+                        background: root.custom-output ? Theme.accent-dim : Theme.surface-2;
                         accessible-role: button;
                         accessible-label: "A folder you choose";
 
