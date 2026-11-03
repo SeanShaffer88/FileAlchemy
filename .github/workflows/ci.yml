@@ -31,14 +31,50 @@ jobs:
         continue-on-error: true
         run: cargo fmt --all -- --check
 
+      # Compiler diagnostics are re-emitted as check-run annotations. That is
+      # the only channel that survives when the raw log URL is unreachable
+      # (it is signed blob storage, often blocked by egress policy), so a
+      # failing build stays diagnosable without the full log.
       - name: Clippy
-        run: cargo clippy --all-targets -- -A clippy::too_many_arguments -A clippy::needless_return
+        shell: pwsh
+        run: |
+          cargo clippy --all-targets --message-format=short -- -A clippy::too_many_arguments -A clippy::needless_return *> clippy.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Host "----- last 40 lines -----"
+            Get-Content clippy.txt | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
+            $errors = Get-Content clippy.txt | Where-Object { $_ -match ':\d+:\d+: error' } | Select-Object -First 120
+            if (-not $errors) { $errors = Get-Content clippy.txt | Where-Object { $_ -match 'error' } | Select-Object -First 120 }
+            foreach ($e in $errors) { Write-Host "::error title=rustc::$($e.Trim())" }
+            Write-Host "::error title=clippy::cargo clippy exited with code $code"
+            exit 1
+          }
 
       - name: Unit tests (formats, config, mime, parsers, placement, PDF writer)
-        run: cargo test --all-targets
+        shell: pwsh
+        run: |
+          cargo test --all-targets --message-format=short *> test.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Get-Content test.txt | Select-Object -Last 60 | ForEach-Object { Write-Host $_ }
+            $errors = Get-Content test.txt | Where-Object { $_ -match ':\d+:\d+: error|panicked at|FAILED' } | Select-Object -First 100
+            foreach ($e in $errors) { Write-Host "::error title=test::$($e.Trim())" }
+            Write-Host "::error title=tests::cargo test exited with code $code"
+            exit 1
+          }
 
       - name: Release build (static CRT)
-        run: cargo build --release
+        shell: pwsh
+        run: |
+          cargo build --release --message-format=short *> build.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Get-Content build.txt | Select-Object -Last 40 | ForEach-Object { Write-Host $_ }
+            $errors = Get-Content build.txt | Where-Object { $_ -match error } | Select-Object -First 100
+            foreach ($e in $errors) { Write-Host "::error title=build::$($e.Trim())" }
+            Write-Host "::error title=build::cargo build exited with code $code"
+            exit 1
+          }
 
       - name: Verify static CRT + embedded manifest
         shell: pwsh
