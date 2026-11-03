@@ -59,6 +59,8 @@ is phrased so a pass/fail is unambiguous.
 - [ ] PNG (with transparency) → JPG: transparency becomes white, no black halo.
 - [ ] PNG → WebP → PNG round-trip keeps the alpha channel.
 - [ ] JPG → AVIF: file is smaller and opens in Edge/Explorer thumbnails.
+- [ ] AVIF → PNG: card shows a clear "AVIF is an output-only format here"
+      message (decoding would need a C codec) instead of a generic decode error.
 - [ ] SVG → PNG renders shapes; text (if the SVG has any) is legible.
 - [ ] PNG → PDF: opens in Edge, one page, correct aspect ratio, no blurring
       beyond the source pixels.

@@ -9,6 +9,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use image::codecs::jpeg::JpegEncoder;
+use imgref::ImgVec;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{DynamicImage, ExtendedColorType, ImageEncoder, ImageFormat};
 
@@ -74,6 +75,17 @@ fn decode(req: &TaskRequest) -> Result<DynamicImage> {
     if req.detected.kind == InputKind::Svg {
         return render_svg(&req.source);
     }
+    if req.detected.kind == InputKind::Avif {
+        return Err(EngineError::Unsupported {
+            what: "AVIF input".into(),
+            detail: concat!(
+                "AVIF is an output-only format here: decoding it needs a C codec ",
+                "(dav1d), and FileAlchemy stays pure Rust. Convert the file with ",
+                "ffmpeg (ffmpeg -i in.avif out.png) once, then convert that here.",
+            )
+            .into(),
+        });
+    }
 
     let reader = image::ImageReader::open(&req.source)?
         .with_guessed_format()
@@ -99,12 +111,25 @@ fn decode(req: &TaskRequest) -> Result<DynamicImage> {
         .map_err(|e| EngineError::Decode(format!("{}: {e}", req.file_name())))
 }
 
+thread_local! {
+    /// Parsing options with the system font database loaded.
+    ///
+    /// `usvg::Options::default()` starts with an *empty* font database, so any
+    /// `<text>` would silently render as nothing. Scanning the installed fonts
+    /// costs a few tens of milliseconds, so it is done once per worker thread
+    /// rather than once per file.
+    static SVG_OPTIONS: resvg::usvg::Options<'static> = {
+        let mut options = resvg::usvg::Options::default();
+        options.fontdb_mut().load_system_fonts();
+        options
+    };
+}
+
 /// Rasterise an SVG at its intrinsic size (capped), so the normal resize path
 /// can then apply the user's resolution choice.
 fn render_svg(path: &Path) -> Result<DynamicImage> {
     let data = std::fs::read(path)?;
-    let options = resvg::usvg::Options::default();
-    let tree = resvg::usvg::Tree::from_data(&data, &options)
+    let tree = SVG_OPTIONS.with(|options| resvg::usvg::Tree::from_data(&data, options))
         .map_err(|e| EngineError::Decode(format!("SVG could not be parsed: {e}")))?;
 
     let size = tree.size();
@@ -254,10 +279,13 @@ fn encode_webp(img: &DynamicImage, path: &Path) -> Result<()> {
 fn encode_avif(img: &DynamicImage, preset: Preset, path: &Path) -> Result<()> {
     let rgba = img.to_rgba8();
     let (width, height) = (rgba.width() as usize, rgba.height() as usize);
-    let pixels: Vec<rgb::RGBA8> = rgba
+    // `ravif::RGBA8` is the same `rgb::RGBA8` type ravif links against, so the
+    // pixels can be handed over without a conversion copy.
+    let pixels: Vec<ravif::RGBA8> = rgba
         .pixels()
-        .map(|p| rgb::RGBA8::new(p[0], p[1], p[2], p[3]))
+        .map(|p| ravif::RGBA8::new(p[0], p[1], p[2], p[3]))
         .collect();
+    let pixels = ImgVec::new(pixels, width, height);
 
     let encoder = ravif::Encoder::new()
         .with_quality(preset.avif_quality())
@@ -265,7 +293,7 @@ fn encode_avif(img: &DynamicImage, preset: Preset, path: &Path) -> Result<()> {
         .with_speed(preset.avif_speed());
 
     let encoded = encoder
-        .encode_rgba(ravif::Img::new(&pixels[..], width, height))
+        .encode_rgba(pixels.as_ref())
         .map_err(|e| EngineError::Encode(format!("AVIF: {e}")))?;
 
     let mut writer = create(path)?;
@@ -311,13 +339,6 @@ fn encode_pdf(img: &DynamicImage, preset: Preset, path: &Path) -> Result<()> {
     finish(writer)
 }
 
-/// Kept for callers that want a one-shot encode into memory (tests).
-pub fn encode_to_memory(img: &DynamicImage, format: ImageFormat) -> Result<Vec<u8>> {
-    let mut buf = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut buf, format)
-        .map_err(|e| EngineError::Encode(e.to_string()))?;
-    Ok(buf.into_inner())
-}
 
 #[cfg(test)]
 mod tests {

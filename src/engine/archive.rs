@@ -314,8 +314,16 @@ fn pack_sevenz(
             return Err(EngineError::Cancelled);
         }
         let input = File::open(path)?;
+        // Build the entry from its public fields: sevenz-rust has moved its
+        // path-based helpers between releases, but the entry struct and
+        // `push_archive_entry` have been stable.
+        let mut entry = sevenz_rust::SevenZArchiveEntry::new();
+        entry.name = name.clone();
+        entry.has_stream = true;
+        entry.is_directory = false;
+        entry.size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         writer
-            .push_source(input, name, false)
+            .push_archive_entry(entry, Some(input))
             .map_err(|e| EngineError::Encode(format!("7Z: {e}")))?;
         progress(Some(0.55 + 0.4 * (i as f32 / total as f32)));
     }

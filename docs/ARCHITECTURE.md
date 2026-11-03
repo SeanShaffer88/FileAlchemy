@@ -99,7 +99,8 @@ against `mime::InputKind::targets()`. The same table drives the UI (through the
 
 | Input kind | Module | Notes |
 |---|---|---|
-| PNG/JPG/WebP/BMP/TIFF/GIF/ICO/SVG/AVIF/QOI | `image_convert` | fully in-process |
+| PNG/JPG/WebP/BMP/TIFF/GIF/ICO/SVG/QOI | `image_convert` | fully in-process |
+| AVIF (input) | `image_convert` | rejected with an explanation: decoding needs the C dav1d codec |
 | MP4/MKV/MOV/AVI/WebM/MP3/WAV/FLAC/AAC/OGG/M4A | `media` | ffmpeg with explicit argv |
 | PDF | `docs` | `pdftoppm` → one PNG per page |
 | DOCX/EPUB/MD/TXT/HTML | `docs` | pandoc |
@@ -243,8 +244,13 @@ Fluent style's light palette, and means the app ships no image assets at all
 * **No PDF → DOCX.** Requires OCR/layout reconstruction; pandoc cannot do it and
   no engine is bundled. PDF → PNG is offered instead.
 * **Animated GIF → still image keeps frame 1.** For animation, use MP4/WebM.
-* **SVG text** is rendered with usvg's default font database; exotic fonts may
-  substitute or be missing. Paths and shapes are always exact.
+* **SVG text** is rendered with the system font database (loaded once per
+  worker thread); exotic fonts may substitute or be missing. Paths and shapes
+  are always exact.
+* **AVIF is output-only.** `image`'s `avif` feature enables ravif, which is an
+  encoder; decoding requires `avif-native` (dav1d, a C dependency) and this
+  build stays pure Rust. Selecting an `.avif` input produces a message naming
+  ffmpeg as the way to decode it once.
 * **RTF → text is best-effort** (control-word stripping, `\u` and `\'hh`
   decoding). It is a text extractor, not an RTF layout engine.
 * **Archives:** no password-protected archives, and 7Z creation uses LZMA2 only.
