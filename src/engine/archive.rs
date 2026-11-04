@@ -31,6 +31,9 @@ pub fn run(
     token: &CancelToken,
     progress: ProgressFn<'_>,
 ) -> Result<Vec<PathBuf>> {
+    if is_cancelled(token) {
+        return Err(EngineError::Cancelled);
+    }
     let work = ctx.scratch.task_dir(req.id)?;
     let staging = work.join("extract");
     fs::create_dir_all(&staging)?;
@@ -94,6 +97,9 @@ fn extract_zip(
     token: &CancelToken,
     mut progress: ProgressFn<'_>,
 ) -> Result<()> {
+    if is_cancelled(token) {
+        return Err(EngineError::Cancelled);
+    }
     let file = File::open(source)?;
     let mut archive = zip::ZipArchive::new(BufReader::new(file))
         .map_err(|e| EngineError::Decode(format!("ZIP: {e}")))?;
@@ -469,6 +475,36 @@ mod tests {
         let mut progress = no_op;
         let err = extract_zip(&archive, &dest, &token, &mut progress).unwrap_err();
         assert!(matches!(err, EngineError::Cancelled));
+        assert!(!dest.exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn cancelled_empty_zip_creates_no_output() {
+        let root = tmp_root("cancel-empty");
+        let archive = root.join("empty.zip");
+        zip::ZipWriter::new(File::create(&archive).unwrap())
+            .finish()
+            .unwrap();
+        let token = crate::engine::new_cancel_token();
+        token.store(true, std::sync::atomic::Ordering::Relaxed);
+        let dest = root.join("out");
+        let err = extract_zip(&archive, &dest, &token, &mut no_op).unwrap_err();
+        assert!(matches!(err, EngineError::Cancelled));
+        assert!(!dest.exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn malformed_zip_without_cancellation_reports_decode_error() {
+        let root = tmp_root("malformed");
+        let archive = root.join("malformed.zip");
+        fs::write(&archive, b"PK\x05\x06").unwrap();
+        let token = crate::engine::new_cancel_token();
+        let dest = root.join("out");
+        let err = extract_zip(&archive, &dest, &token, &mut no_op).unwrap_err();
+        assert!(matches!(err, EngineError::Decode(_)));
+        assert!(!dest.exists());
         fs::remove_dir_all(&root).unwrap();
     }
 }

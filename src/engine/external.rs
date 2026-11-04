@@ -334,8 +334,10 @@ mod tests {
             .arg("-i")
             .arg(r"C:\my videos\a.mp4");
         let line = spec.command_line();
-        assert!(line.contains("\"-i\""), "{line}");
-        assert!(line.contains("\"C:\\my videos\\a.mp4\""), "{line}");
+        assert_eq!(
+            line,
+            r#""C:\Program Files\bin\ffmpeg.exe" -i "C:\my videos\a.mp4""#
+        );
     }
 
     #[test]
