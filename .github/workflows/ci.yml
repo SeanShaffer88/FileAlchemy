@@ -64,12 +64,12 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          $src = @('clippy.txt','test.txt','build.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $src = @('build.txt','test.txt','clippy.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $src) { Write-Host '::error title=ci::no cargo log was produced'; exit 0 }
           $lines = Get-Content $src
           $entries = @()
           for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match ':\d+:\d+: error' -or $lines[$i] -match 'could not compile' -or $lines[$i] -match '^\s*panicked at') {
+            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match ':\d+:\d+: error' -or $lines[$i] -match 'could not compile' -or $lines[$i] -match 'panicked at|^failures:|^test result:|^test .* \.\.\. FAILED$') {
               $where = ''
               for ($j = $i + 1; $j -lt [Math]::Min($i + 4, $lines.Count); $j++) {
                 if ($lines[$j] -match '^\s*-->') { $where = $lines[$j].Trim(); break }
@@ -85,12 +85,12 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          $src = @('clippy.txt','test.txt','build.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $src = @('build.txt','test.txt','clippy.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $src) { exit 0 }
           $lines = Get-Content $src
           $entries = @()
           for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match ':\d+:\d+: error' -or $lines[$i] -match 'could not compile' -or $lines[$i] -match '^\s*panicked at') {
+            if ($lines[$i] -match '^\s*error(\[E\d+\])?:' -or $lines[$i] -match ':\d+:\d+: error' -or $lines[$i] -match 'could not compile' -or $lines[$i] -match 'panicked at|^failures:|^test result:|^test .* \.\.\. FAILED$') {
               $where = ''
               for ($j = $i + 1; $j -lt [Math]::Min($i + 4, $lines.Count); $j++) {
                 if ($lines[$j] -match '^\s*-->') { $where = $lines[$j].Trim(); break }
@@ -104,7 +104,7 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          $src = @('clippy.txt','test.txt','build.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $src = @('build.txt','test.txt','clippy.txt') | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $src) { exit 0 }
           $i = 0
           Get-Content $src | Select-Object -Last 15 | ForEach-Object {
@@ -171,3 +171,14 @@ jobs:
           name: FileAlchemy-ci-binary
           path: target/release/FileAlchemy.exe
           if-no-files-found: error
+
+      - name: Upload raw cargo logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FileAlchemy-ci-cargo-logs
+          path: |
+            clippy.txt
+            test.txt
+            build.txt
+          if-no-files-found: warn
