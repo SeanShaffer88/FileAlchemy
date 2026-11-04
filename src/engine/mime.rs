@@ -168,14 +168,15 @@ impl InputKind {
     pub fn default_target(self) -> Format {
         use InputKind::*;
         match self {
-            Png | Webp | Bmp | Tiff | Gif | Ico | Svg | Avif | Qoi => Format::Webp,
+            Png | Bmp | Tiff | Gif | Ico | Svg | Avif | Qoi => Format::Webp,
+            Webp => Format::Png,
             Jpeg => Format::Webp,
             // MP4 -> MP4 would be a pointless default re-encode, so a plain
             // MP4 defaults to WebM and everything else defaults to MP4.
             Mp4 => Format::Webm,
             Webm | Mkv | Mov | Avi => Format::Mp4,
-            Wav | Flac | Aac | Ogg => Format::Mp3,
-            Mp3 | M4a => Format::M4a,
+            Wav | Flac | Aac | Ogg | M4a => Format::Mp3,
+            Mp3 => Format::M4a,
             Pdf => Format::Png,
             Docx | Html | Epub => Format::Markdown,
             Markdown => Format::Docx,
@@ -692,6 +693,9 @@ mod tests {
     fn default_targets_are_not_no_ops() {
         // WebP -> WebP would be a pointless re-encode.
         assert_ne!(InputKind::Webp.default_target(), Format::Webp);
+        assert_eq!(InputKind::Webp.default_target(), Format::Png);
+        assert_ne!(InputKind::M4a.default_target(), Format::M4a);
+        assert_eq!(InputKind::M4a.default_target(), Format::Mp3);
         assert_ne!(InputKind::Mp4.default_target(), Format::Mp4);
         assert_ne!(InputKind::Zip.default_target(), Format::Zip);
     }

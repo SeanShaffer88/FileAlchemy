@@ -163,6 +163,8 @@ impl Engine {
     pub fn shutdown(&mut self) {
         self.cancel_all();
         self.job_tx.take();
+        // Unblock event sends after the UI has stopped draining the channel.
+        drop(std::mem::replace(&mut self.rx, crossbeam_channel::never()));
         for handle in self.workers.drain(..) {
             let _ = handle.join();
         }
@@ -315,6 +317,7 @@ mod tests {
     }
 
     fn request(id: u64, source: PathBuf) -> TaskRequest {
+        let output_dir = source.parent().unwrap().to_path_buf();
         TaskRequest {
             id,
             source,
@@ -327,10 +330,56 @@ mod tests {
             target: Format::Markdown,
             preset: Preset::Balanced,
             resolution: Resolution::Original,
-            output_dir: source.parent().unwrap().to_path_buf(),
+            output_dir,
             collision: CollisionPolicy::AutoRename,
             purge_on_cancel: true,
         }
+    }
+
+    #[test]
+    fn dropping_engine_with_full_event_queue_finishes_and_cleans_up() {
+        let root =
+            std::env::temp_dir().join(format!("filealchemy-shutdown-{}", std::process::id()));
+        let ctx = build_context(&root.join("temp"), &root).unwrap();
+        let scratch_root = ctx.scratch.root().to_path_buf();
+        let staged = ctx.scratch.task_dir(4999).unwrap();
+        std::fs::write(staged.join("partial.txt"), "inert fixture").unwrap();
+        std::fs::write(scratch_root.join("orphan.tmp"), "inert fixture").unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let source = root.join("does-not-exist.txt");
+        let worker = std::thread::spawn(move || {
+            let engine = Engine::new(ctx, 1);
+            for id in 0..5000 {
+                let token = new_cancel_token();
+                token.store(true, Ordering::SeqCst);
+                lock_tokens(&engine.tokens).insert(id, Arc::clone(&token));
+                engine
+                    .job_tx
+                    .as_ref()
+                    .unwrap()
+                    .send(Job {
+                        req: request(id, source.clone()),
+                        token,
+                    })
+                    .unwrap();
+            }
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !engine.rx.is_full() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(engine.rx.is_full(), "event queue never filled");
+            let tokens = Arc::clone(&engine.tokens);
+            drop(engine);
+            assert!(lock_tokens(&tokens).is_empty());
+            done_tx.send(()).unwrap();
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("engine drop did not finish with an undrained event queue");
+        worker.join().unwrap();
+        assert_eq!(std::fs::read_dir(&scratch_root).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

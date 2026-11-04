@@ -17,8 +17,7 @@
       type="win32"
       name="FileAlchemy.Desktop"
       version="1.0.0.0"
-      processorArchitecture="amd64"
-      language="*" />
+      processorArchitecture="amd64" />
 
   <description>FileAlchemy - offline universal file converter</description>
 
