@@ -31,6 +31,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Validate application manifest
+        shell: pwsh
+        run: |
+          $mt = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/mt.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $mt) { throw "Windows SDK mt.exe not found" }
+          & $mt.FullName -nologo -manifest app.manifest -validate_manifest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       # Non-blocking: the checked-in sources were authored without a local
       # toolchain, so formatting is normalised here and reported, not enforced.
       - name: rustfmt (informational)
