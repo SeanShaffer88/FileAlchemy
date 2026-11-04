@@ -130,10 +130,10 @@ jobs:
               throw "Static CRT check failed: $exe imports $needle"
             }
           }
-          $utf16 = [System.Text.Encoding]::Unicode.GetString([System.IO.File]::ReadAllBytes($exe))
-          if (-not $utf16.Contains("PerMonitorV2")) {
-            throw "Per-Monitor V2 DPI manifest is not embedded"
-          }
+          $mt = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/mt.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $mt) { throw "Windows SDK mt.exe not found" }
+          & ./scripts/verify-embedded-manifest.ps1 -ExecutablePath $exe -MtPath $mt.FullName -OutputDirectory manifest-diagnostics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host "Static CRT and DPI manifest verified."
 
       - name: CLI smoke test (version, help, Explorer integration)
@@ -179,6 +179,14 @@ jobs:
           name: FileAlchemy-ci-binary
           path: target/release/FileAlchemy.exe
           if-no-files-found: error
+
+      - name: Upload embedded manifest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FileAlchemy-ci-manifest-diagnostics
+          path: manifest-diagnostics/
+          if-no-files-found: warn
 
       - name: Upload raw cargo logs
         if: always()
