@@ -139,22 +139,22 @@ jobs:
       - name: CLI smoke test (version, help, Explorer integration)
         shell: pwsh
         run: |
-          $exe = "target/release/FileAlchemy.exe"
+          $exe = (Resolve-Path -LiteralPath "target/release/FileAlchemy.exe").Path
 
-          & $exe --version | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "--version failed" }
-          & $exe --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "--help failed" }
+          $proc = Start-Process -FilePath $exe -ArgumentList "--version" -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+          if ($proc.ExitCode -ne 0) { throw "--version failed (exit $($proc.ExitCode))" }
+          $proc = Start-Process -FilePath $exe -ArgumentList "--help" -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+          if ($proc.ExitCode -ne 0) { throw "--help failed (exit $($proc.ExitCode))" }
 
-          & $exe --install-shell-menu
-          if ($LASTEXITCODE -ne 0) { throw "--install-shell-menu failed" }
+          $proc = Start-Process -FilePath $exe -ArgumentList "--install-shell-menu" -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+          if ($proc.ExitCode -ne 0) { throw "--install-shell-menu failed (exit $($proc.ExitCode))" }
           $key = "Registry::HKEY_CURRENT_USER\Software\Classes\*\shell\FileAlchemy"
           if (-not (Test-Path -LiteralPath $key)) { throw "Context menu key was not created" }
           $command = (Get-ItemProperty -LiteralPath "$key\command").'(default)'
           if ($command -notmatch 'FileAlchemy\.exe" "%1') { throw "Unexpected command: $command" }
 
-          & $exe --uninstall-shell-menu
-          if ($LASTEXITCODE -ne 0) { throw "--uninstall-shell-menu failed" }
+          $proc = Start-Process -FilePath $exe -ArgumentList "--uninstall-shell-menu" -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+          if ($proc.ExitCode -ne 0) { throw "--uninstall-shell-menu failed (exit $($proc.ExitCode))" }
           if (Test-Path -LiteralPath $key) { throw "Context menu key was not removed" }
 
       # A GUI smoke test: the window must appear and stay alive, then close
